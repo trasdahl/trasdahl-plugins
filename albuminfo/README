@@ -1,0 +1,57 @@
+ALBUMINFO VERSION 0.1
+
+Albuminfo is a gmusicbrowser plugin for retrieving album-relevant information (such as reviews) from
+allmusic.com (AMG).
+
+It has only been tested with version 1.1.7 of gmusicbrowser.
+
+
+INSTALLATION
+
+Copy albuminfo.pm to ~/.config/gmusicbrowser/plugins (create the folder if it doesn't exist) or the
+plugins folder in your installation (for example /usr/share/gmusicbrowser/plugins).
+
+Restart gmusicbrowser.
+
+
+USAGE
+
+Enable the plugin in Prefereneces -> Plugins. The plugin creates a new tab in the "Context"
+widget. Album info is downloaded for the playing song. The context pane also supports groups (as
+defined in the layout file).
+
+The plugin must search AMG before it can download the album info. If it fetches the wrong album, the
+user can search AMG manually by clicking the "Manual search" button. A dialog window opens with the
+search results.
+
+The "Refresh" button makes a new, automatic AMG search, meaning that the plugin will pick the album
+(and ignore any albums the user have chosen with a manual search).
+
+
+OPTIONS
+
+"Auto-save positive finds" means saving the album info whenever an album's AMG page is found (even
+if there is no review on the page). The review file is overwritten without confirmation on every
+positive hit.
+
+"Auto-save fields" means saving AMG info about Genres, Moods, Styles or Themes for all the songs in
+the album. NOTE: GENRES IS THE ONLY FIELD EXISTING AND ENABLED IN GMUSICBROWSER BY DEFAULT. "Moods", 
+"Styles" and "Themes" exists, but must be enabled. This can be done under Preferences -> Fields -> 
+Standard fields -> mood/style/theme. 
+
+
+VERSION HISTORY
+
+2011.09.19 v.0.11
+-Option to downlad reviews for all albums in prefrerences.
+-Move manual search from separate window into context tab.
+-Fix bug in matching albums or artists with uppercase umlauts.
+-Save fields more efficiently.
+-Fix bug in loading reviews with newlines from file.
+-Correct treatment of unknown album.
+-Move from custom "Style" and "Theme" fields to gmb fields "style" and "theme" (commit cd25ff9ab93f5626a820e69180b71834f2c15dc8)
+-Change the default icon to "plugin-albuminfo".
+
+2011.06.30 v.0.1
+-initial release.
+
