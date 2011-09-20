@@ -187,7 +187,7 @@ sub new {
 	$searchview->hide();
 	$searchview->signal_connect(  map => sub {$searchbutton->set_active(1)});
 	$searchview->signal_connect(unmap => sub {$searchbutton->set_active(0)});
-	$self->signal_connect(destroy => sub {$_[0]->cancel()}); # FIXME: Causes warning at quit if plugin was deactivated during session.
+	$self->signal_connect(destroy => sub {$_[0]->cancel() if ref($_[0]) =~ m|albuminfo|i});
 
 	$self->{buffer} = $textview->get_buffer();
 	$self->{infoview} = $infoview;
@@ -359,7 +359,7 @@ sub entry_selected_cb {
 	warn "Albuminfo: fetching review from url $selected->{url}\n" if $::debug;
 	$self->{url} = $selected->{url}.'/review';
 	$self->cancel();
-	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review(::GetSelID($self),1,@_)}, url=>$self->{url}, cache=>1);
+	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review(::GetSelID($self),@_)}, url=>$self->{url}, cache=>1);
 }
 
 
@@ -415,7 +415,7 @@ sub update_titlebox {
 				_"Total playcount:"	.' '.$self->{playcount});
 	$self->{ratingpic}->set_from_pixbuf(Songs::Stars($self->{rating},'rating'));
 	$self->{Ltitle}->set_markup( AA::ReplaceFields($aID,"<big><b>%a</b></big>","album",1) );
-	$self->{Lstats}->set_markup( AA::ReplaceFields($aID,'<small>by %b\n%y\n%s, %l</small>',"album",1) );
+	$self->{Lstats}->set_markup( AA::ReplaceFields($aID,'%b « %y\n%s, %l',"album",1) );
 	for my $name (qw/Ltitle Lstats/) { $self->{$name}->set_tooltip_text($tip); }
 }
 
