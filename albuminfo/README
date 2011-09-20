@@ -42,7 +42,7 @@ Standard fields -> mood/style/theme.
 
 VERSION HISTORY
 
-2011.09.19 v.0.11
+2011.09.20 v.0.11
 -Option to downlad reviews for all albums in prefrerences.
 -Move manual search from separate window into context tab.
 -Fix bug in matching albums or artists with uppercase umlauts.
@@ -51,6 +51,7 @@ VERSION HISTORY
 -Correct treatment of unknown album.
 -Move from custom "Style" and "Theme" fields to gmb fields "style" and "theme" (commit cd25ff9ab93f5626a820e69180b71834f2c15dc8)
 -Change the default icon to "plugin-albuminfo".
+-Show genres along with review and allow saving each genre manually.
 
 2011.06.30 v.0.1
 -initial release.

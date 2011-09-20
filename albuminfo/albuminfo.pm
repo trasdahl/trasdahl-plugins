@@ -15,7 +15,6 @@ desc	Retrieves album-relevant information (review etc.) from allmusic.com.
 
 # TODO:
 # - Create local links in the review that can be used for contextmenus and filtering.
-# - Display Genres in context pane, add option to save each genre manually.
 # - Notify the user if AMGs "Release date" differs from GMBs "year" tag.
 # - Consider searching google instead, or add google search if amg fails.
 
@@ -117,7 +116,10 @@ sub new {
 	# "Refresh", "save" and "search" buttons
 	my $refreshbutton = ::NewIconButton('gtk-refresh', undef, sub { song_changed($self,undef,undef,1); }, "none", _"Refresh");
 	my $savebutton	  = ::NewIconButton('gtk-save', undef, sub {save_review(::GetSelID($self),$self->{fields})}, "none", _"Save review");
-	my $searchbutton  = ::NewIconButton('gtk-find', undef, sub {$self->manual_search()}, "none", _"Manual search"); # FIXME: make it a togglebutton.
+	my $searchbutton = Gtk2::ToggleButton->new();
+	$searchbutton->set_relief('none');
+	$searchbutton->add(Gtk2::Image->new_from_stock('gtk-find','menu'));
+	$searchbutton->signal_connect(toggled => sub {if ($_[0]->get_active()) {$self->manual_search()} else {$self->song_changed()}});
 	my $buttonbox = Gtk2::HBox->new();
 	$buttonbox->pack_end($searchbutton,0,0,0);
 	$buttonbox->pack_end($savebutton,0,0,0); # unless $::Options{OPT.'AutoSave'};
@@ -183,6 +185,8 @@ sub new {
 	$self->pack_start($searchview,1,1,0);
 	$infoview->show();
 	$searchview->hide();
+	$searchview->signal_connect(  map => sub {$searchbutton->set_active(1)});
+	$searchview->signal_connect(unmap => sub {$searchbutton->set_active(0)});
 	$self->signal_connect(destroy => sub {$_[0]->cancel()}); # FIXME: Causes warning at quit if plugin was deactivated during session.
 
 	$self->{buffer} = $textview->get_buffer();
@@ -193,17 +197,15 @@ sub new {
 
 sub update_cursor_cb {
 	my $textview = $_[0];
-	my (undef,$wx,$wy,undef) = $textview->window->get_pointer;
+	my (undef,$wx,$wy,undef) = $textview->window->get_pointer();
 	my ($x,$y) = $textview->window_to_buffer_coords('widget',$wx,$wy);
 	my $iter = $textview->get_iter_at_location($x,$y);
 	my $cursor = 'xterm';
-	for my $tag ($iter->get_tags) {
-		next unless $tag->{url};
-		$cursor = 'hand2';
-		$textview->set_tooltip_text($tag->{url});
-		last;
+	for my $tag ($iter->get_tags()) {
+		$cursor = 'hand2' if $tag->{tip};
+		$textview->set_tooltip_text($tag->{tip} || '');
 	}
-	return if ($textview->{cursor}||'') eq $cursor;
+	return if ($textview->{cursor} || '') eq $cursor;
 	$textview->{cursor} = $cursor;
 	$textview->get_window('text')->set_cursor(Gtk2::Gdk::Cursor->new($cursor));
 }
@@ -214,20 +216,16 @@ sub button_release_cb {
 	my $self = ::find_ancestor($textview,__PACKAGE__);
 	return ::FALSE unless $event->button == 1;
 	my ($x,$y) = $textview->window_to_buffer_coords('widget',$event->x, $event->y);
-	my $url = $self->url_at_coords($x,$y,$textview);
-	::main::openurl($url) if $url;
-	return ::FALSE;
-}
-
-sub url_at_coords {
-	my ($self,$x,$y,$textview) = @_;
 	my $iter = $textview->get_iter_at_location($x,$y);
 	for my $tag ($iter->get_tags) {
-		next unless $tag->{url};
-		if ($tag->{url} =~ m/^#(\d+)?/) { $self->scrollto($1) if defined $1; last }
-		my $url= $tag->{url};
-		return $url;
+		if ($tag->{url}) {
+			::main::openurl($tag->{url});
+			last;
+		} elsif ($tag->{field}) {
+			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), '+'.$tag->{field} => $tag->{val});
+		}
 	}
+	return ::FALSE;
 }
 
 sub cover_popup {
@@ -267,18 +265,25 @@ sub print_review {
 	my $buffer = $self->{buffer};
 	$buffer->set_text("");
 	my $fontsize = $self->{fontsize};
-	my $tag_h2 = $buffer->create_tag(undef, justification=>'left', font=>$fontsize+1, weight=>Gtk2::Pango::PANGO_WEIGHT_BOLD);
-	my $tag_b  = $buffer->create_tag(undef, justification=>'left', weight=>Gtk2::Pango::PANGO_WEIGHT_BOLD);
-	my $tag_i  = $buffer->create_tag(undef, justification=>'left', style=>'italic');
-	my $tag_a  = $buffer->create_tag(undef, justification=>'left', foreground=>"#4ba3d2", underline=>'single');
+	my $tag_h2 = $buffer->create_tag(undef, font=>$fontsize+1, weight=>Gtk2::Pango::PANGO_WEIGHT_BOLD);
+	my $tag_b  = $buffer->create_tag(undef, weight=>Gtk2::Pango::PANGO_WEIGHT_BOLD);
+	my $tag_i  = $buffer->create_tag(undef, style=>'italic');
 	my $iter = $buffer->get_start_iter();
 	if ($self->{fields}{label})    {$buffer->insert_with_tags($iter,_"Label:  ",$tag_b); $buffer->insert($iter,"$self->{fields}{label}\n")}
 	if ($self->{fields}{rec_date}) {$buffer->insert_with_tags($iter,_"Recording date:  ",$tag_b); $buffer->insert($iter,"$self->{fields}{rec_date}\n")}
 	if ($self->{fields}{rls_date}) {$buffer->insert_with_tags($iter,_"Release date:  ",$tag_b); $buffer->insert($iter,"$self->{fields}{rls_date}\n");}
 	if ($self->{fields}{rating})   {$buffer->insert_with_tags($iter,_"AMG Rating: ",$tag_b);
 					$buffer->insert_pixbuf($iter, Songs::Stars($self->{fields}{rating}, 'rating')); $buffer->insert($iter,"\n");}
-	# if ($self->{fields}{style})    {$buffer->insert_with_tags($iter,_"Genres:  ",$tag_b); $buffer->insert($iter,"".join(", ",@{$self->{fields}{style}})."\n")}
-	# elsif ($self->{fields}{genre}) {$buffer->insert_with_tags($iter,_"Genres:  ",$tag_b); $buffer->insert($iter,"".join(", ",@{$self->{fields}{genre}})."\n")}
+	if ($self->{fields}{style} || $self->{fields}{genre})    {
+		$buffer->insert_with_tags($iter, _"Genres:  ",$tag_b);
+		my $i = 0;
+		foreach my $g (@{$self->{fields}{style}}, @{$self->{fields}{genre}}) {
+			my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
+			$tag->{field} = 'genre'; $tag->{val} = $g; $tag->{tip} = _"Add $g to genres for all tracks on this album.";
+			$buffer->insert_with_tags($iter,"$g",$tag); $buffer->insert($iter,", ") if ++$i < scalar(@{$self->{fields}{style}}) + scalar(@{$self->{fields}{genre}});
+		}
+		$buffer->insert($iter, "\n");
+	}
 	if ($self->{fields}->{review}) {
 		$buffer->insert_with_tags($iter, _"\nReview\n", $tag_h2);
 		$buffer->insert_with_tags($iter, _"by ".$self->{fields}->{author}."\n", $tag_i);
@@ -286,7 +291,8 @@ sub print_review {
 	} else {
 		$buffer->insert_with_tags($iter,_"\nNo review written.\n",$tag_h2);
 	}
-	$tag_a->{url} = $self->{fields}->{url};
+	my $tag_a  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
+	$tag_a->{url} = $self->{fields}->{url}; $tag_a->{tip} = $self->{fields}->{url};
 	$buffer->insert_with_tags($iter,_"\n\nLookup at allmusic.com",$tag_a);
 	$buffer->set_modified(0);
 }
@@ -421,8 +427,8 @@ sub load_search_results {
 	my $url;
 	foreach my $entry (@$result) {
 		# Pick the first entry with the right artist and year, or if not: just the right artist.
-		# if ($entry->{artist} =~ m|$artist|i || $artist =~ m|$entry->{artist}|i) {
-		if (::superlc($entry->{artist}) eq ::superlc($artist)) {
+		# if (::superlc($entry->{artist}) eq ::superlc($artist)) {
+		if ($entry->{artist} =~ m|$artist|i || $artist =~ m|$entry->{artist}|i) {
 			if (!$url || $entry->{year} == $year) {
 				warn "Albuminfo: AMG hit: $entry->{album} by $entry->{artist} from year=$entry->{year} ($entry->{url})\n" if $::debug;
 				$url = $entry->{url}."/review";
