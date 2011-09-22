@@ -15,7 +15,6 @@ desc	Retrieves album-relevant information (review etc.) from allmusic.com.
 
 # TODO:
 # - Create local links in the review that can be used for contextmenus and filtering.
-# - Notify the user if AMGs "Release date" differs from GMBs "year" tag.
 # - Consider searching google instead, or add google search if amg fails.
 
 package GMB::Plugin::ALBUMINFO;
@@ -30,9 +29,25 @@ use constant
 {	OPT	=> 'PLUGIN_ALBUMINFO_',
 };
 
+my @showfields =
+(	{short => 'label',	long => 'Label',		active => 1,	multi => 0,	defaultshow => 1},
+	{short => 'rec_date',	long => 'Recording date',	active => 1,	multi => 0,	defaultshow => 1},
+	{short => 'rls_date',	long => 'Release date',		active => 1,	multi => 0,	defaultshow => 1},
+	{short => 'type',	long => 'Recording type',	active => 0,	multi => 0,	defaultshow => 0},
+	{short => 'time',	long => 'Running time',		active => 0,	multi => 0,	defaultshow => 0},
+	{short => 'rating',	long => 'Rating',		active => 1,	multi => 0,	defaultshow => 1},
+	{short => 'genre',	long => 'Genres',		active => 1,	multi => 1,	defaultshow => 0},
+	{short => 'mood',	long => 'Moods',		active => 1,	multi => 1,	defaultshow => 0},
+	{short => 'style',	long => 'Styles',		active => 1,	multi => 1,	defaultshow => 0},
+	{short => 'theme',	long => 'Themes',		active => 1,	multi => 1,	defaultshow => 0},
+);
+
 ::SetDefaultOptions(OPT,PathFile  => "~/.config/gmusicbrowser/review/%a - %l.txt",
 			CoverSize => 100,
+			StyleAsGenre => 0,
 );
+for (@showfields) {::SetDefaultOptions(OPT, 'Show'.$_->{short} => $_->{defaultshow})}
+
 
 my $albuminfowidget =
 {	class		=> __PACKAGE__,
@@ -54,11 +69,10 @@ sub Stop {
 
 sub prefbox {
 	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text1=>_"Cover Size : ", text2=>_"(applied after restart)");
-	my $btn_amg      = ::NewIconButton('plugin-artistinfo-allmusic',undef, sub {::main::openurl("http://www.allmusic.com/"); },
-					   'none',_"Open allmusic.com website in your browser");
+	my $btn_amg      = ::NewIconButton('plugin-artistinfo-allmusic',undef, sub {::main::openurl("http://www.allmusic.com/"); },'none',_"Open allmusic.com in your web browser");
 	my $hbox_picsize = ::Hpack($spin_picsize, '-', $btn_amg);
 
-	my $frame_review = Gtk2::Frame->new(_"Review");
+	my $frame_review = Gtk2::Frame->new(_" Review ");
 	my $entry_path   = ::NewPrefEntry(OPT.'PathFile' => _"Save album info in:", width=>40);
 	my $lbl_preview  = Label::Preview->new(event=>'CurSong Option', noescape=>1, wrap=>1, preview=>sub
 	{	return '' unless defined $::SongID;
@@ -70,20 +84,27 @@ sub prefbox {
 	my $chk_autosave = ::NewPrefCheckButton(OPT.'AutoSave' => _"Auto-save positive finds"); #, tip=>_"Only works when the review tab is displayed");
 	$frame_review->add(::Vpack($entry_path,$lbl_preview,$chk_autosave));
 
-	my $frame_fields = Gtk2::Frame->new(_"Fields");
+	my $frame_fields = Gtk2::Frame->new(_" Fields ");
+	my $chk_join = ::NewPrefCheckButton(OPT.'StyleAsGenre' => _"Include Styles in Genres", tip=>_"Allmusic uses both Genres and Styles to describe albums. If you use only Genres, you may want to include Styles in the list of Genres.");
 	my @chk_fields;
-	foreach my $field (qw(genre mood style theme)) {
+	for my $field (qw(genre mood style theme)) {
 		push(@chk_fields, ::NewPrefCheckButton(OPT.$field=>_(ucfirst($field)."s"), tip=>_"Note: inactive fields must be enabled by the user in the 'Fields' tab in Settings"));
 		$chk_fields[-1]->set_sensitive(0) unless Songs::FieldEnabled($field);
 	}
 	my ($radio_add,$radio_rpl) = ::NewPrefRadio(OPT.'ReplaceFields',undef,_"Add to existing values",1,_"Replace existing values",0);
-	my $chk_saveflds = ::NewPrefCheckButton(OPT.'SaveFields'=>_"Auto-save fields with data from allmusic", 
-						tip=>_"Save selected fields for all tracks on the same album whenever album data is loaded from AMG or from file.", 
-						widget=>::Vpack(\@chk_fields, $radio_add, $radio_rpl));
-	$frame_fields->add(::Vpack($chk_saveflds));
+	my $chk_saveflds = ::NewPrefCheckButton(OPT.'SaveFields'=>_"Auto-save fields with data from allmusic", widget=>::Vpack(\@chk_fields, $radio_add, $radio_rpl),
+		tip=>_"Save selected fields for all tracks on the same album whenever album data is loaded from AMG or from file.");
+	$frame_fields->add(::Vpack($chk_join, $chk_saveflds));
 
-	return ::Vpack($hbox_picsize, $frame_review, $frame_fields);
+	my $frame_layout = Gtk2::Frame->new(_" Context pane layout ");
+	my @chk_show = ();
+	for my $f (@showfields) {
+		push(@chk_show, ::NewPrefCheckButton(OPT.'Show'.$f->{short} => _"$f->{long}")) if $f->{active};
+	}
+	$frame_layout->add(::Hpack(@chk_show));
+	return ::Vpack($hbox_picsize, $frame_review, $frame_fields, $frame_layout);
 }
+
 
 
 #####################################################################
@@ -99,9 +120,8 @@ sub new {
 	$self->{fontsize} = $fontsize->get_size() / Gtk2::Pango->scale;
 
 	# Heading: cover and album info.
-	my $cover = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, maxsize=>$::Options{OPT.'CoverSize'}, 
-						xalign=>0, tip=>_"Click to show fullsize image", click1=>\&cover_popup,
-						click3=>sub {::PopupAAContextMenu({self=>$_[0], field=>'album', ID=>$::SongID, gid=>Songs::Get_gid($::SongID,'album'), mode=>'P'});} });
+	my $cover = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, maxsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show fullsize image", 
+		click1=>\&cover_popup, click3=>sub {::PopupAAContextMenu({self=>$_[0], field=>'album', ID=>$::SongID, gid=>Songs::Get_gid($::SongID,'album'), mode=>'P'});} });
 	my $statbox = Gtk2::VBox->new(0,0);
 	for my $name (qw/Ltitle Lstats/) {
 		my $l = Gtk2::Label->new('');
@@ -114,12 +134,14 @@ sub new {
 	$statbox->pack_start($self->{ratingpic},0,0,2);
 
 	# "Refresh", "save" and "search" buttons
-	my $refreshbutton = ::NewIconButton('gtk-refresh', undef, sub { song_changed($self,undef,undef,1); }, "none", _"Refresh");
-	my $savebutton	  = ::NewIconButton('gtk-save', undef, sub {save_review(::GetSelID($self),$self->{fields})}, "none", _"Save review");
+	my $refreshbutton = ::NewIconButton('gtk-refresh', undef, sub { song_changed(::find_ancestor($_[0],__PACKAGE__),undef,undef,1); }, "none", _"Refresh");
+	my $savebutton	  = ::NewIconButton('gtk-save', undef, sub 
+		{my $self=::find_ancestor($_[0],__PACKAGE__); save_review(::GetSelID($self),$self->{fields})}, "none", _"Save review");
 	my $searchbutton = Gtk2::ToggleButton->new();
 	$searchbutton->set_relief('none');
 	$searchbutton->add(Gtk2::Image->new_from_stock('gtk-find','menu'));
-	$searchbutton->signal_connect(toggled => sub {if ($_[0]->get_active()) {$self->manual_search()} else {$self->song_changed()}});
+	$searchbutton->signal_connect(toggled => sub {my $self=::find_ancestor($_[0],__PACKAGE__); 
+		if ($_[0]->get_active()) {$self->manual_search()} else {$self->song_changed()}});
 	my $buttonbox = Gtk2::HBox->new();
 	$buttonbox->pack_end($searchbutton,0,0,0);
 	$buttonbox->pack_end($savebutton,0,0,0); # unless $::Options{OPT.'AutoSave'};
@@ -127,8 +149,8 @@ sub new {
 	$statbox->pack_end($buttonbox,0,0,0);
 	my $stateventbox = Gtk2::EventBox->new(); # To catch mouse events
 	$stateventbox->add($statbox);
-	$stateventbox->signal_connect(button_press_event => sub {my ($stateventbox, $event) = @_; return 0 unless $event->button == 3; my $ID = ::GetSelID($self);
-								 ::PopupAAContextMenu({ self=>$stateventbox, mode=>'P', field=>'album', ID=>$ID, gid=>Songs::Get_gid($ID,'album') }) if defined $ID; return 1; } );
+	$stateventbox->signal_connect(button_press_event => sub {my ($stateventbox, $event) = @_; return 0 unless $event->button == 3; my $ID = ::GetSelID($stateventbox);
+		 ::PopupAAContextMenu({ self=>$stateventbox, mode=>'P', field=>'album', ID=>$ID, gid=>Songs::Get_gid($ID,'album') }) if defined $ID; return 1; } );
 	my $coverstatbox = Gtk2::HBox->new(0,0);
 	$coverstatbox->pack_start($cover,0,0,0);
 	$coverstatbox->pack_end($stateventbox,1,1,5);
@@ -175,9 +197,9 @@ sub new {
 	$Bsearch->signal_connect(clicked  => \&new_search );
 	$Bok    ->signal_connect(clicked  => \&entry_selected_cb );
 	$Bcancel->signal_connect(clicked  => \&song_changed );
-	$scrwin ->signal_connect(key_press_event => sub {$self->entry_selected_cb() if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Return};});
-	$scrwin ->signal_connect(key_press_event => sub {$self->song_changed()      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
-	$search ->signal_connect(key_press_event => sub {$self->song_changed()      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
+	$scrwin ->signal_connect(key_press_event => sub {entry_selected_cb(::find_ancestor($_[0],__PACKAGE__)) if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Return};});
+	$scrwin ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
+	$search ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
 
 	# Pack it all into self (a VBox)
 	$self->pack_start($coverstatbox,0,0,0);
@@ -187,7 +209,7 @@ sub new {
 	$searchview->hide();
 	$searchview->signal_connect(  map => sub {$searchbutton->set_active(1)});
 	$searchview->signal_connect(unmap => sub {$searchbutton->set_active(0)});
-	$self->signal_connect(destroy => sub {$_[0]->cancel() if ref($_[0]) =~ m|albuminfo|i});
+	$self->signal_connect(destroy => sub {$_[0]->cancel()});
 
 	$self->{buffer} = $textview->get_buffer();
 	$self->{infoview} = $infoview;
@@ -221,8 +243,14 @@ sub button_release_cb {
 		if ($tag->{url}) {
 			::main::openurl($tag->{url});
 			last;
-		} elsif ($tag->{field}) {
-			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), '+'.$tag->{field} => $tag->{val});
+		} elsif ($tag->{field} eq 'year') {
+			my $aID = Songs::Get_gid(::GetSelID($self),'album');
+			# FIXME: Year is not properly updated before update_titlebox.
+			Songs::Set(Songs::MakeFilterFromGID('album', $aID)->filter(), [$tag->{field} => $tag->{val}],
+				   callback_finish => sub {$self->update_titlebox($aID); $self->print_review()});
+		} else {
+			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), ['+'.$tag->{field} => $tag->{val}],
+				   callback_finish => sub {$self->print_review()});
 		}
 	}
 	return ::FALSE;
@@ -263,36 +291,58 @@ sub print_warning {
 sub print_review {
 	my ($self) = @_;
 	my $buffer = $self->{buffer};
+	my $fields = $self->{fields};
 	$buffer->set_text("");
 	my $fontsize = $self->{fontsize};
 	my $tag_h2 = $buffer->create_tag(undef, font=>$fontsize+1, weight=>Gtk2::Pango::PANGO_WEIGHT_BOLD);
 	my $tag_b  = $buffer->create_tag(undef, weight=>Gtk2::Pango::PANGO_WEIGHT_BOLD);
 	my $tag_i  = $buffer->create_tag(undef, style=>'italic');
 	my $iter = $buffer->get_start_iter();
-	if ($self->{fields}{label})    {$buffer->insert_with_tags($iter,_"Label:  ",$tag_b); $buffer->insert($iter,"$self->{fields}{label}\n")}
-	if ($self->{fields}{rec_date}) {$buffer->insert_with_tags($iter,_"Recording date:  ",$tag_b); $buffer->insert($iter,"$self->{fields}{rec_date}\n")}
-	if ($self->{fields}{rls_date}) {$buffer->insert_with_tags($iter,_"Release date:  ",$tag_b); $buffer->insert($iter,"$self->{fields}{rls_date}\n");}
-	if ($self->{fields}{rating})   {$buffer->insert_with_tags($iter,_"AMG Rating: ",$tag_b);
-					$buffer->insert_pixbuf($iter, Songs::Stars($self->{fields}{rating}, 'rating')); $buffer->insert($iter,"\n");}
-	if ($self->{fields}{style} || $self->{fields}{genre})    {
-		$buffer->insert_with_tags($iter, _"Genres:  ",$tag_b);
-		my $i = 0;
-		foreach my $g (@{$self->{fields}{style}}, @{$self->{fields}{genre}}) {
-			my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
-			$tag->{field} = 'genre'; $tag->{val} = $g; $tag->{tip} = _"Add $g to genres for all tracks on this album.";
-			$buffer->insert_with_tags($iter,"$g",$tag); $buffer->insert($iter,", ") if ++$i < scalar(@{$self->{fields}{style}}) + scalar(@{$self->{fields}{genre}});
+
+	for my $f (@showfields) {
+		if ($fields->{$f->{short}} && $::Options{OPT.'Show'.$f->{short}} && $f->{active}) {
+			$buffer->insert_with_tags($iter, _"$f->{long}:  ",$tag_b);
+			if ($f->{multi}) {
+				my @old = Songs::Get_list(::GetSelID($self), $f->{short});
+				my @amg = @{$fields->{$f->{short}}};
+				my $i = 0;
+				for my $val (@amg) {
+					if (grep {lc($_) eq lc($val)} @old) {
+						$buffer->insert($iter, $val);
+					} else {
+						my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
+						$tag->{field} = $f->{short}; $tag->{val} = $val; $tag->{tip} = _"Add $val to "._(lc($f->{long}))." for all tracks on this album.";
+						$buffer->insert_with_tags($iter, $val, $tag);
+					}
+					$buffer->insert($iter,", ") if ++$i < scalar(@amg);
+				}
+			} elsif ($f->{short} eq 'rls_date') {
+				$fields->{rls_date} =~ m|(\d{4})|;
+				if (defined $1 && $1 != Songs::Get(::GetSelID($self), 'year')) {
+					my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
+					$tag->{field} = 'year'; $tag->{val} = $1; $tag->{tip} = _"Set $1 as year for all tracks on this album.";
+					$buffer->insert_with_tags($iter, $fields->{rls_date}, $tag);
+				} else {
+					$buffer->insert($iter,"$fields->{rls_date}");
+				}
+			} elsif ($f->{short} eq 'rating') {
+				$buffer->insert_pixbuf($iter, Songs::Stars($fields->{rating}, 'rating'));
+			} else {
+				$buffer->insert($iter,"$fields->{$f->{short}}");
+			}
+			$buffer->insert($iter, "\n");
 		}
-		$buffer->insert($iter, "\n");
 	}
-	if ($self->{fields}->{review}) {
+
+	if ($fields->{review}) {
 		$buffer->insert_with_tags($iter, _"\nReview\n", $tag_h2);
-		$buffer->insert_with_tags($iter, _"by ".$self->{fields}->{author}."\n", $tag_i);
-		$buffer->insert($iter,$self->{fields}->{review});
+		$buffer->insert_with_tags($iter, _"by ".$fields->{author}."\n", $tag_i);
+		$buffer->insert($iter,$fields->{review});
 	} else {
 		$buffer->insert_with_tags($iter,_"\nNo review written.\n",$tag_h2);
 	}
 	my $tag_a  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
-	$tag_a->{url} = $self->{fields}->{url}; $tag_a->{tip} = $self->{fields}->{url};
+	$tag_a->{url} = $fields->{url}; $tag_a->{tip} = $fields->{url};
 	$buffer->insert_with_tags($iter,_"\n\nLookup at allmusic.com",$tag_a);
 	$buffer->set_modified(0);
 }
@@ -335,10 +385,10 @@ sub print_results {
 	my $result = parse_amg_search_results($html, $type); # result is a ref to an array of hash refs
 	my @radios;
 	if ( $#{$result} + 1 ) {
-		push(@radios, Gtk2::RadioButton->new(undef, "$_->{artist} - $_->{album} ($_->{year}) on $_->{label}")) foreach @$result;
+		push(@radios, Gtk2::RadioButton->new(undef, "$_->{artist} - $_->{album} ($_->{year}) on $_->{label}")) for @$result;
 		my $group = $radios[0]->get_group();
 		$radios[$_]->set_group($group) for (1 .. $#radios);
-		$self->{resultsbox}->pack_start($_,0,0,0) foreach @radios;
+		$self->{resultsbox}->pack_start($_,0,0,0) for @radios;
 	} else {
 		$self->{resultsbox}->pack_start(Gtk2::Label->new(_"No results found."),0,0,20);
 	}
@@ -353,7 +403,7 @@ sub entry_selected_cb {
 	$self->{infoview}->show();
 	return unless ( $#{$self->{result}} + 1 );
 	my $selected;
-	foreach (0 .. $#{$self->{radios}}) {
+	for (0 .. $#{$self->{radios}}) {
 		if (${$self->{radios}}[$_]->get_active()) {$selected = ${$self->{result}}[$_]; last;}
 	}
 	warn "Albuminfo: fetching review from url $selected->{url}\n" if $::debug;
@@ -425,7 +475,7 @@ sub load_search_results {
 	my $result = parse_amg_search_results($html, $type);
 	my ($artist,$year) = ::Songs::Get($ID, qw/artist year/);
 	my $url;
-	foreach my $entry (@$result) {
+	for my $entry (@$result) {
 		# Pick the first entry with the right artist and year, or if not: just the right artist.
 		# if (::superlc($entry->{artist}) eq ::superlc($artist)) {
 		if ($entry->{artist} =~ m|$artist|i || $artist =~ m|$entry->{artist}|i) {
@@ -495,6 +545,8 @@ sub parse_amg_album_page {
 	(@{$result->{mood}})	= $moodshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $moodshtml;
 	my ($themeshtml)	= $html =~ m|<h3>Themes</h3>\s*?<ul.*?>(.*?)</ul>|;
 	(@{$result->{theme}})	= $themeshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $themeshtml;
+	# if ($::Options{OPT.'StyleAsGenre'}) {@{$result->{genre}} = map {$_} (@{$result->{style}}, @{$result->{genre}})} # A plain (@a,@b) doesn't work if @a=undef.
+	if ($::Options{OPT.'StyleAsGenre'}) {@{$result->{genre}} = ::uniq(@{$result->{style}}, @{$result->{genre}})}
 	return $result;
 }
 
@@ -533,6 +585,7 @@ sub load_file {
 		}
 		close $fh;
 	}
+	if ($::Options{OPT.'StyleAsGenre'}) {@{$self->{fields}->{genre}} = ::uniq(@{$self->{fields}->{style}}, @{$self->{fields}->{genre}})}
 	$self->print_review();
 	save_fields($ID, $self->{fields}) if $::Options{OPT.'SaveFields'}; # We may not have saved when first downloaded.
 }
@@ -568,7 +621,7 @@ sub save_fields {
 	my $IDs = Songs::MakeFilterFromGID('album', Songs::Get_gid($ID,'album'))->filter(); # Songs on this album
 	my @updated_fields;
 	for my $key (keys %{$fields}) {
-		if ($key =~ m/mood|style|theme/ && $::Options{OPT.$key} && $fields->{$key}) {
+		if ($key =~ m/genre|mood|style|theme/ && $::Options{OPT.$key} && $fields->{$key}) {
 			if ( $::Options{OPT.'ReplaceFields'} ) {
 				push(@updated_fields, $key, $fields->{$key});
 			} else {
