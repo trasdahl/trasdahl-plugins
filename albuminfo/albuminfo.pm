@@ -149,6 +149,7 @@ sub new {
 	$statbox->pack_end($buttonbox,0,0,0);
 	my $stateventbox = Gtk2::EventBox->new(); # To catch mouse events
 	$stateventbox->add($statbox);
+	$stateventbox->{group}= $options->{group};
 	$stateventbox->signal_connect(button_press_event => sub {my ($stateventbox, $event) = @_; return 0 unless $event->button == 3; my $ID = ::GetSelID($stateventbox);
 		 ::PopupAAContextMenu({ self=>$stateventbox, mode=>'P', field=>'album', ID=>$ID, gid=>Songs::Get_gid($ID,'album') }) if defined $ID; return 1; } );
 	my $coverstatbox = Gtk2::HBox->new(0,0);
@@ -245,12 +246,9 @@ sub button_release_cb {
 			last;
 		} elsif ($tag->{field} eq 'year') {
 			my $aID = Songs::Get_gid(::GetSelID($self),'album');
-			# FIXME: Year is not properly updated before update_titlebox.
-			Songs::Set(Songs::MakeFilterFromGID('album', $aID)->filter(), [$tag->{field} => $tag->{val}],
-				   callback_finish => sub {$self->update_titlebox($aID); $self->print_review()});
+			Songs::Set(Songs::MakeFilterFromGID('album', $aID)->filter(), [$tag->{field} => $tag->{val}]);
 		} else {
-			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), ['+'.$tag->{field} => $tag->{val}],
-				   callback_finish => sub {$self->print_review()});
+			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), ['+'.$tag->{field} => $tag->{val}]);
 		}
 	}
 	return ::FALSE;
@@ -432,13 +430,15 @@ sub song_changed {
 	if (!$self->{aID} || $aID != $self->{aID} || $force) { # Check if album has changed or a forced update is required.
 		$self->{aID} = $aID;
 		$self->album_changed($ID, $aID, $force);
+	} else {
+	        ::IdleDo('9_refresh_albuminfo'.$self, undef, sub { $self->update_titlebox($aID); $self->print_review() if ($self->{fields}) });
 	}
 }
 
 sub album_changed {
 	my ($self,$ID,$aID,$force) = @_;
-	$self->update_titlebox($aID);
 	$self->cancel();
+	$self->update_titlebox($aID);
 	my $album = ::url_escapeall(Songs::Gid_to_Get("album",$aID));
 	if ($album eq '') {$self->print_warning(_"Unknown album"); return}
 	my $url = "http://allmusic.com/search/album/$album";
@@ -446,7 +446,7 @@ sub album_changed {
 	unless ($force) { # Try loading from file.
 		my $file = ::pathfilefromformat( ::GetSelID($self), $::Options{OPT.'PathFile'}, undef, 1 );
 		if ($file && -r $file) {
-			::IdleDo('8_albuminfo'.$self,1000,\&load_file,$self,$ID,$file);
+			::IdleDo('9_load_albuminfo'.$self,1000,\&load_file,$self,$ID,$file);
 			return;
 		}
 	}
@@ -635,7 +635,8 @@ sub save_fields {
 # Cancel pending tasks, and abort possible http_wget in progress.
 sub cancel {
 	my $self = shift;
-	delete $::ToDo{'8_albuminfo'.$self};
+	delete $::ToDo{'9_load_albuminfo'.$self};
+	delete $::ToDo{'9_refresh_albuminfo'.$self};
 	$self->{waiting}->abort() if $self->{waiting};
 }
 
