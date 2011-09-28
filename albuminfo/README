@@ -52,6 +52,8 @@ VERSION HISTORY
 -Move from custom "Style" and "Theme" fields to gmb fields "style" and "theme" (commit cd25ff9ab93f5626a820e69180b71834f2c15dc8)
 -Change the default icon to "plugin-albuminfo".
 -Show genres along with review and allow saving each genre manually.
+-Show fields (genres, moods, style, theme) and allow saving each manually.
+-Allow correcting year if AMG 'release date' differs from GMB year.
 
 2011.06.30 v.0.1
 -initial release.

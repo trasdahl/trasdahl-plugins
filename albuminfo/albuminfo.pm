@@ -24,7 +24,6 @@ use utf8;
 require $::HTTP_module;
 use Gtk2::Gdk::Keysyms;
 use base 'Gtk2::Box';
-use base 'Gtk2::Dialog';
 use constant
 {	OPT	=> 'PLUGIN_ALBUMINFO_',
 };
@@ -42,11 +41,11 @@ my @showfields =
 	{short => 'theme',	long => 'Themes',		active => 1,	multi => 1,	defaultshow => 0},
 );
 
-::SetDefaultOptions(OPT,PathFile  => "~/.config/gmusicbrowser/review/%a - %l.txt",
-			CoverSize => 100,
-			StyleAsGenre => 0,
+::SetDefaultOptions(OPT, PathFile  	=> "~/.config/gmusicbrowser/review/%a - %l.txt",
+			 CoverSize	=> 100,
+			 StyleAsGenre	=> 0,
 );
-for (@showfields) {::SetDefaultOptions(OPT, 'Show'.$_->{short} => $_->{defaultshow})}
+::SetDefaultOptions(OPT, 'Show'.$_->{short} => $_->{defaultshow}) for (@showfields);
 
 
 my $albuminfowidget =
@@ -140,7 +139,7 @@ sub new {
 	my $searchbutton = Gtk2::ToggleButton->new();
 	$searchbutton->set_relief('none');
 	$searchbutton->add(Gtk2::Image->new_from_stock('gtk-find','menu'));
-	$searchbutton->signal_connect(toggled => sub {my $self=::find_ancestor($_[0],__PACKAGE__); 
+	$searchbutton->signal_connect(clicked => sub {my $self=::find_ancestor($_[0],__PACKAGE__); 
 		if ($_[0]->get_active()) {$self->manual_search()} else {$self->song_changed()}});
 	my $buttonbox = Gtk2::HBox->new();
 	$buttonbox->pack_end($searchbutton,0,0,0);
@@ -176,7 +175,7 @@ sub new {
 	my $infoview = Gtk2::HBox->new();
 	$infoview->set_spacing(0);
 	$infoview->pack_start($sw,1,1,0);
-	$textview->show();
+	$infoview->show_all();
 
 	# Manual search layout
 	my $searchview = Gtk2::VBox->new();
@@ -201,17 +200,19 @@ sub new {
 	$scrwin ->signal_connect(key_press_event => sub {entry_selected_cb(::find_ancestor($_[0],__PACKAGE__)) if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Return};});
 	$scrwin ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
 	$search ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
+	$searchview->show_all(); # Must call it once now before $searchview->set_no_show_all(1) disables it.
+	$searchview->set_no_show_all(1); # GMB sometimes calls $plugin->show_all(). We then want only infoview to show.
+	$searchview->hide();
 
 	# Pack it all into self (a VBox)
 	$self->pack_start($coverstatbox,0,0,0);
 	$self->pack_start($infoview,1,1,0);
 	$self->pack_start($searchview,1,1,0);
-	$infoview->show();
-	$searchview->hide();
-	$searchview->signal_connect(  map => sub {$searchbutton->set_active(1)});
-	$searchview->signal_connect(unmap => sub {$searchbutton->set_active(0)});
+	$searchview->signal_connect(show => sub {$searchbutton->set_active(1)});
+	$searchview->signal_connect(hide => sub {$searchbutton->set_active(0)});
 	$self->signal_connect(destroy => sub {$_[0]->cancel()});
 
+	# Save elements that will be needed in other methods.
 	$self->{buffer} = $textview->get_buffer();
 	$self->{infoview} = $infoview;
 	$self->{searchview} = $searchview;
@@ -288,6 +289,7 @@ sub print_warning {
 # Print review (and additional data) in the text buffer
 sub print_review {
 	my ($self) = @_;
+	unless ($self->{fields}{url}) {$self->print_warning(_"No review found"); return}
 	my $buffer = $self->{buffer};
 	my $fields = $self->{fields};
 	$buffer->set_text("");
@@ -300,14 +302,14 @@ sub print_review {
 	for my $f (@showfields) {
 		if ($fields->{$f->{short}} && $::Options{OPT.'Show'.$f->{short}} && $f->{active}) {
 			$buffer->insert_with_tags($iter, _"$f->{long}:  ",$tag_b);
-			if ($f->{multi}) {
+			if ($f->{multi}) { # genres, moods, styles and themes.
 				my @old = Songs::Get_list(::GetSelID($self), $f->{short});
 				my @amg = @{$fields->{$f->{short}}};
 				my $i = 0;
 				for my $val (@amg) {
 					if (grep {lc($_) eq lc($val)} @old) {
 						$buffer->insert($iter, $val);
-					} else {
+					} else { # val doesn't exist in local db => create link to save it.
 						my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
 						$tag->{field} = $f->{short}; $tag->{val} = $val; $tag->{tip} = _"Add $val to "._(lc($f->{long}))." for all tracks on this album.";
 						$buffer->insert_with_tags($iter, $val, $tag);
@@ -316,7 +318,7 @@ sub print_review {
 				}
 			} elsif ($f->{short} eq 'rls_date') {
 				$fields->{rls_date} =~ m|(\d{4})|;
-				if (defined $1 && $1 != Songs::Get(::GetSelID($self), 'year')) {
+				if (defined $1 && $1 != Songs::Get(::GetSelID($self), 'year')) { # AMG year differs from local year => create link to correct.
 					my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
 					$tag->{field} = 'year'; $tag->{val} = $1; $tag->{tip} = _"Set $1 as year for all tracks on this album.";
 					$buffer->insert_with_tags($iter, $fields->{rls_date}, $tag);
@@ -429,9 +431,10 @@ sub song_changed {
 	return unless $aID;
 	if (!$self->{aID} || $aID != $self->{aID} || $force) { # Check if album has changed or a forced update is required.
 		$self->{aID} = $aID;
+		$self->{album} = Songs::Gid_to_Get("album",$aID);
 		$self->album_changed($ID, $aID, $force);
-	} else {
-	        ::IdleDo('9_refresh_albuminfo'.$self, undef, sub { $self->update_titlebox($aID); $self->print_review() if ($self->{fields}) });
+	} else { # happens for example when song properties are edited, so we need to repaint the widget.
+	        ::IdleDo('9_refresh_albuminfo'.$self, undef, sub { $self->update_titlebox($aID); length($self->{album}) ? $self->print_review() : $self->print_warning(_"Unknown album") });
 	}
 }
 
@@ -440,13 +443,13 @@ sub album_changed {
 	$self->cancel();
 	$self->update_titlebox($aID);
 	my $album = ::url_escapeall(Songs::Gid_to_Get("album",$aID));
-	if ($album eq '') {$self->print_warning(_"Unknown album"); return}
+	unless (length($album)) {$self->print_warning(_"Unknown album"); return}
 	my $url = "http://allmusic.com/search/album/$album";
 	$self->print_warning(_"Loading...");
 	unless ($force) { # Try loading from file.
 		my $file = ::pathfilefromformat( ::GetSelID($self), $::Options{OPT.'PathFile'}, undef, 1 );
 		if ($file && -r $file) {
-			::IdleDo('9_load_albuminfo'.$self,1000,\&load_file,$self,$ID,$file);
+			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,$file);
 			return;
 		}
 	}
@@ -491,6 +494,7 @@ sub load_search_results {
 		warn "Albuminfo: fetching review from url $url\n" if $::debug;
 		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,@_)}, url=>$url, cache=>1);
 	} else {
+		$self->{fields} = {};
 		$self->print_warning(_"No review found");
 	}	
 }
@@ -545,8 +549,7 @@ sub parse_amg_album_page {
 	(@{$result->{mood}})	= $moodshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $moodshtml;
 	my ($themeshtml)	= $html =~ m|<h3>Themes</h3>\s*?<ul.*?>(.*?)</ul>|;
 	(@{$result->{theme}})	= $themeshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $themeshtml;
-	# if ($::Options{OPT.'StyleAsGenre'}) {@{$result->{genre}} = map {$_} (@{$result->{style}}, @{$result->{genre}})} # A plain (@a,@b) doesn't work if @a=undef.
-	if ($::Options{OPT.'StyleAsGenre'}) {@{$result->{genre}} = ::uniq(@{$result->{style}}, @{$result->{genre}})}
+	if ($::Options{OPT.'StyleAsGenre'} && $result->{style}) {@{$result->{genre}} = ::uniq(@{$result->{style}}, @{$result->{genre}})}
 	return $result;
 }
 
@@ -584,8 +587,12 @@ sub load_file {
 			}
 		}
 		close $fh;
+	} else {
+		warn "Albuminfo: failed retrieving info from $file\n" if $::debug;
+		$self->print_warning(_"No review found");
+		$self->fields = {};
 	}
-	if ($::Options{OPT.'StyleAsGenre'}) {@{$self->{fields}->{genre}} = ::uniq(@{$self->{fields}->{style}}, @{$self->{fields}->{genre}})}
+	if ($::Options{OPT.'StyleAsGenre'} && $self->{fields}->{style}) {@{$self->{fields}->{genre}} = ::uniq(@{$self->{fields}->{style}}, @{$self->{fields}->{genre}})}
 	$self->print_review();
 	save_fields($ID, $self->{fields}) if $::Options{OPT.'SaveFields'}; # We may not have saved when first downloaded.
 }
