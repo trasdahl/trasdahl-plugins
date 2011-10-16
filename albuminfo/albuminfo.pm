@@ -191,7 +191,7 @@ sub new {
 	my $id = 0;
 	for (qw(Artist Album Year Label)) {
 		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$_", Gtk2::CellRendererText->new(), text=>$id);
-		$column->set_sort_column_id($id++); $column->set_expand(1); $column->set_resizable(1);
+		$column->set_sort_column_id($id++); $column->set_expand(1); $column->set_resizable(1); $column->set_reorderable(1);
 		$treeview->append_column($column);
 	}
 	$treeview->set_rules_hint(1);
