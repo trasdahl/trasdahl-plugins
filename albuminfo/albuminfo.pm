@@ -57,6 +57,13 @@ my $albuminfowidget =
 	autoadd_type	=> 'context page text',
 };
 
+my @columns; # (Album, Artist, Label, Year). For list of amg search hits in searchview.
+my @ColumnMenu = # Warning: the ordering here depends on the order in which the columns were created.
+(	{ label => _"Album",	check => sub { return $columns[0]->get_visible() },	code => sub { my $c=$columns[0]; $c->set_visible(!$c->get_visible()) }, },
+	{ label => _"Artist",	check => sub { return $columns[1]->get_visible() },	code => sub { my $c=$columns[1]; $c->set_visible(!$c->get_visible()) }, },
+	{ label => _"Label",	check => sub { return $columns[2]->get_visible() },	code => sub { my $c=$columns[2]; $c->set_visible(!$c->get_visible()) }, },
+	{ label => _"Year",	check => sub { return $columns[3]->get_visible() },	code => sub { my $c=$columns[3]; $c->set_visible(!$c->get_visible()) }, },
+);
 
 sub Start {
 	Layout::RegisterWidget(PluginAlbuminfo => $albuminfowidget);
@@ -186,13 +193,21 @@ sub new {
 	my $Bcancel = Gtk2::Button->new_from_stock('gtk-cancel');
 	$Bok    ->set_size_request(80, -1);
 	$Bcancel->set_size_request(80, -1);
-	my $store = Gtk2::ListStore->new('Glib::String','Glib::String','Glib::String','Glib::String','Glib::String');
+	# ListStore contains: Album, Artist, Label, Year, URL, Sort order.
+	my $store = Gtk2::ListStore->new('Glib::String','Glib::String','Glib::String','Glib::String','Glib::String','Glib::String');
 	my $treeview = Gtk2::TreeView->new($store);
 	my $id = 0;
-	for (qw(Artist Album Year Label)) {
-		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$_", Gtk2::CellRendererText->new(), text=>$id);
-		$column->set_sort_column_id($id++); $column->set_expand(1); $column->set_resizable(1); $column->set_reorderable(1);
-		$treeview->append_column($column);
+	for my $field (qw(Album Artist Label Year)) { # Do not reorder, or clowns will eat you.
+		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$field", Gtk2::CellRendererText->new(), text=>$id);
+		# FIXME: save column visibility, position and width in $::Options.
+		$column->set_sort_column_id($id); $column->set_expand(1); $column->set_resizable(1); $column->set_reorderable(1);
+		$treeview->append_column($column); 
+		$columns[$id] = $column;
+		# Recreate the header label to be able to catch mouse clicks in column header:
+		my $label = Gtk2::Label->new(_"$field"); $column->set_widget($label); $label->show();
+		my $button = $label->get_ancestor('Gtk2::Button'); # The header label is attached to a button by Gtk
+		$button->signal_connect(button_press_event => \&treeview_click_cb, $id) if $button;
+		$id++;
 	}
 	$treeview->set_rules_hint(1);
 	$treeview->signal_connect(row_activated => \&entry_selected_cb);
@@ -229,6 +244,23 @@ sub new {
 	$self->{infoview} = $infoview;
 	$self->{searchview} = $searchview;
 	return $self;
+}
+
+# Called when headers in the results table in manual search are clicked
+sub treeview_click_cb {
+	my ($button, $event, $colid) = @_;
+	my $treeview = $button->parent;
+	if ($event->button == 1) {
+		my ($sortid,$order) = $treeview->{store}->get_sort_column_id();
+		if ($sortid == $colid && $order eq 'descending') {
+			$treeview->{store}->set_sort_column_id(5,'ascending'); # After third click on column header: return to AMG sort order (default).
+			return ::TRUE;
+		}
+	} elsif ($event->button == 3) {
+		::PopupContextMenu( \@ColumnMenu );
+		return ::TRUE;
+	}
+	return ::FALSE; # Let Gtk handle it
 }
 
 sub update_cursor_cb {
@@ -355,9 +387,10 @@ sub print_review {
 	} else {
 		$buffer->insert_with_tags($iter,"\n"._("No review written.")."\n",$tag_h2);
 	}
+	$buffer->insert($iter, "\n\n");
 	my $tag_a  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
 	$tag_a->{url} = $fields->{url}; $tag_a->{tip} = $fields->{url};
-	$buffer->insert_with_tags($iter,"\n\n"._"Lookup at allmusic.com",$tag_a);
+	$buffer->insert_with_tags($iter,_"Lookup at allmusic.com",$tag_a);
 	$buffer->set_modified(0);
 }
 
@@ -384,6 +417,7 @@ sub new_search {
 	return if $album eq '';
 	my $url = "http://allmusic.com/search/album/".::url_escapeall($album);
 	$self->cancel();
+	$self->{store}->clear();
 	warn "Albuminfo: fetching AMG search from url $url.\n" if $::debug;
 	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->print_results(@_)},url=>$url, cache=>1);
 }
@@ -392,9 +426,9 @@ sub print_results {
 	my ($self,$html,$type,$url) = @_;
 	delete $self->{waiting};
 	my $result = parse_amg_search_results($html, $type); # result is a ref to an array of hash refs
-	$self->{store}->clear();
+	$self->{store}->set_sort_column_id(5, 'ascending');
 	for (@$result) {
-		$self->{store}->set($self->{store}->append, 0,$_->{artist}, 1,$_->{album}, 2,$_->{year}, 3,$_->{label}, 4,$_->{url}."/review");
+		$self->{store}->set($self->{store}->append, 0,$_->{album}, 1,$_->{artist}, 2,$_->{label}, 3,$_->{year}, 4,$_->{url}."/review", 5,$_->{order});
 	}
 }
 
@@ -515,7 +549,8 @@ sub parse_amg_search_results {
 	my @res = $html =~ m|<a href="(http://allmusic\.com/album.*?)">(.*?)</a></td>\s.*?<td>(.*?)</td>\s.*?<td>(.*?)</td>\s.*?<td>(.*?)</td>|g;
 	my @fields = qw/url album artist label year/;
 	my @result;
-	push(@result, {%_}) while (@_{@fields} = splice(@res, 0, 5)); # create an array of hash refs
+	my $i = 0; # Used to sort the hits in manual search
+	push(@result, {%_, order=>$i++}) while (@_{@fields} = splice(@res, 0, 5)); # create an array of hash refs
 	return \@result;
 }
 
