@@ -57,12 +57,17 @@ my $albuminfowidget =
 	autoadd_type	=> 'context page text',
 };
 
-my @columns; # (Album, Artist, Label, Year). For list of amg search hits in searchview.
+my @cols = # The order here implies column_sort_id. So Album has id 0, Artist 1 etc.
+(	{title => 'Album',	col => {}},
+	{title => 'Artist',	col => {}},
+	{title => 'Label',	col => {}},
+	{title => 'Year',	col => {}},
+);
 my @ColumnMenu = # Warning: the ordering here depends on the order in which the columns were created.
-(	{ label => _"Album",	check => sub { return $columns[0]->get_visible() },	code => sub { my $c=$columns[0]; $c->set_visible(!$c->get_visible()) }, },
-	{ label => _"Artist",	check => sub { return $columns[1]->get_visible() },	code => sub { my $c=$columns[1]; $c->set_visible(!$c->get_visible()) }, },
-	{ label => _"Label",	check => sub { return $columns[2]->get_visible() },	code => sub { my $c=$columns[2]; $c->set_visible(!$c->get_visible()) }, },
-	{ label => _"Year",	check => sub { return $columns[3]->get_visible() },	code => sub { my $c=$columns[3]; $c->set_visible(!$c->get_visible()) }, },
+(	{ label => _"Album",	check => sub { return $cols[0]->{col}->get_visible() },	code => sub { my $c=$cols[0]->{col}; $c->set_visible(!$c->get_visible()) }, },
+	{ label => _"Artist",	check => sub { return $cols[1]->{col}->get_visible() },	code => sub { my $c=$cols[1]->{col}; $c->set_visible(!$c->get_visible()) }, },
+	{ label => _"Label",	check => sub { return $cols[2]->{col}->get_visible() },	code => sub { my $c=$cols[2]->{col}; $c->set_visible(!$c->get_visible()) }, },
+	{ label => _"Year",	check => sub { return $cols[3]->{col}->get_visible() },	code => sub { my $c=$cols[3]->{col}; $c->set_visible(!$c->get_visible()) }, },
 );
 
 sub Start {
@@ -193,24 +198,27 @@ sub new {
 	my $Bcancel = Gtk2::Button->new_from_stock('gtk-cancel');
 	$Bok    ->set_size_request(80, -1);
 	$Bcancel->set_size_request(80, -1);
-	# ListStore contains: Album, Artist, Label, Year, URL, Sort order.
-	my $store = Gtk2::ListStore->new('Glib::String','Glib::String','Glib::String','Glib::String','Glib::String','Glib::String');
+	# Year is a 'Glib::String' to avoid printing "0" when year is missing. Caveat: will give wrong sort order for albums released before year 1000 or after year 9999 :)
+	my $store = Gtk2::ListStore->new('Glib::String','Glib::String','Glib::String','Glib::String','Glib::String','Glib::UInt'); # Album, Artist, Label, Year, URL, Sort order.
 	my $treeview = Gtk2::TreeView->new($store);
-	my $id = 0;
-	for my $field (qw(Album Artist Label Year)) { # Do not reorder, or clowns will eat you.
-		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$field", Gtk2::CellRendererText->new(), text=>$id);
-		# FIXME: save column visibility, position and width in $::Options.
-		$column->set_sort_column_id($id); $column->set_expand(1); $column->set_resizable(1); $column->set_reorderable(1);
-		$treeview->append_column($column); 
-		$columns[$id] = $column;
+	for (my $id = 0; $id <= $#cols; $id++) {
+		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$cols[$id]->{title}", Gtk2::CellRendererText->new(), text=>$id);
+		$column->set_sort_column_id($id); $column->set_resizable(1); $column->set_reorderable(1); $column->set_expand(1); 
+		$column->set_sizing('fixed');
+		$column->set_fixed_width($::Options{OPT.'Column'.$id}->{width}) if $::Options{OPT.'Column'.$id}->{width};
+		my $visible = defined $::Options{OPT.'Column'.$id}->{visible} ? $::Options{OPT.'Column'.$id}->{visible} : 1;
+		my $order   = defined $::Options{OPT.'Column'.$id}->{order}   ? $::Options{OPT.'Column'.$id}->{order} : $id;
+		$column->set_visible($visible);
+		$treeview->insert_column($column,$order);
+		$cols[$id]->{col} = $column;
 		# Recreate the header label to be able to catch mouse clicks in column header:
-		my $label = Gtk2::Label->new(_"$field"); $column->set_widget($label); $label->show();
+		my $label = Gtk2::Label->new(_"$cols[$id]->{title}"); $column->set_widget($label); $label->show();
 		my $button = $label->get_ancestor('Gtk2::Button'); # The header label is attached to a button by Gtk
 		$button->signal_connect(button_press_event => \&treeview_click_cb, $id) if $button;
-		$id++;
 	}
 	$treeview->set_rules_hint(1);
 	$treeview->signal_connect(row_activated => \&entry_selected_cb);
+	$treeview->signal_connect(expose_event => \&expose_event_cb);
 	$treeview->{store} = $store;
 	my $scrwin = Gtk2::ScrolledWindow->new();
 	$scrwin->set_policy('automatic', 'automatic');
@@ -244,6 +252,17 @@ sub new {
 	$self->{infoview} = $infoview;
 	$self->{searchview} = $searchview;
 	return $self;
+}
+
+
+# Called when the results table in manual search changes (column width, column order etc.)
+sub expose_event_cb {
+	my $tv = $_[0];
+	my $order = 0;
+	for my $column ($tv->get_columns()) {
+		::SetOption(OPT.'Column'.$column->get_sort_column_id() => {order=>$order++, width=>$column->get_width(), visible=>$column->get_visible() || 0});
+	}
+	return ::FALSE; # Let Gtk handle it
 }
 
 # Called when headers in the results table in manual search are clicked
@@ -292,7 +311,7 @@ sub button_release_cb {
 		} elsif ($tag->{field} eq 'year') {
 			my $aID = Songs::Get_gid(::GetSelID($self),'album');
 			Songs::Set(Songs::MakeFilterFromGID('album', $aID)->filter(), [$tag->{field} => $tag->{val}]);
-		} else {
+		} else { # Genre, Mood, Style, Theme
 			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), ['+'.$tag->{field} => $tag->{val}]);
 		}
 	}
