@@ -57,18 +57,20 @@ my $albuminfowidget =
 	autoadd_type	=> 'context page text',
 };
 
-my @cols = # The order here implies column_sort_id. So Album has id 0, Artist 1 etc.
+my @columns = # The order here implies column_sort_id. So Album has id 0, Artist 1 etc.
 (	{title => 'Album',	col => {}},
 	{title => 'Artist',	col => {}},
 	{title => 'Label',	col => {}},
 	{title => 'Year',	col => {}},
 );
-my @ColumnMenu = # Warning: the ordering here depends on the order in which the columns were created.
-(	{ label => _"Album",	check => sub { return $cols[0]->{col}->get_visible() },	code => sub { my $c=$cols[0]->{col}; $c->set_visible(!$c->get_visible()) }, },
-	{ label => _"Artist",	check => sub { return $cols[1]->{col}->get_visible() },	code => sub { my $c=$cols[1]->{col}; $c->set_visible(!$c->get_visible()) }, },
-	{ label => _"Label",	check => sub { return $cols[2]->{col}->get_visible() },	code => sub { my $c=$cols[2]->{col}; $c->set_visible(!$c->get_visible()) }, },
-	{ label => _"Year",	check => sub { return $cols[3]->{col}->get_visible() },	code => sub { my $c=$cols[3]->{col}; $c->set_visible(!$c->get_visible()) }, },
+my @ColumnMenu = # The order here must be the same as the order in @columns
+(	{ label => _"Album",	check => sub {return $columns[0]->{col}->get_visible},	code => sub {my $c=$columns[0]->{col}; $c->set_visible(!$c->get_visible)}, },
+	{ label => _"Artist",	check => sub {return $columns[1]->{col}->get_visible},	code => sub {my $c=$columns[1]->{col}; $c->set_visible(!$c->get_visible)}, },
+	{ label => _"Label",	check => sub {return $columns[2]->{col}->get_visible},	code => sub {my $c=$columns[2]->{col}; $c->set_visible(!$c->get_visible)}, },
+	{ label => _"Year",	check => sub {return $columns[3]->{col}->get_visible},	code => sub {my $c=$columns[3]->{col}; $c->set_visible(!$c->get_visible)}, },
 );
+my %savebuttons;
+my %boxandcovers;
 
 sub Start {
 	Layout::RegisterWidget(PluginAlbuminfo => $albuminfowidget);
@@ -79,9 +81,11 @@ sub Stop {
 }
 
 sub prefbox {
-	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text1=>_"Cover Size : ", text2=>_"(applied after restart)");
 	my $btn_amg      = ::NewIconButton('plugin-artistinfo-allmusic',undef, sub {::main::openurl("http://www.allmusic.com/"); },'none',_"Open allmusic.com in your web browser");
-	my $hbox_picsize = ::Hpack($spin_picsize, '-', $btn_amg);
+	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text1=>_"Cover Size : ", text2=>_"(applied after restart)");
+	my $chk_picture  = ::NewPrefCheckButton(OPT.'ShowCover'=>_"Show cover", widget=>$spin_picsize, cb=>sub {for my $boxandcover (values %boxandcovers) {
+		if ($_[0]->get_active)	{$boxandcover->[0]->pack_start($boxandcover->[1],0,0,0); $boxandcover->[1]->show()}
+		else			{$boxandcover->[0]->remove($boxandcover->[1])}}});
 
 	my $frame_review = Gtk2::Frame->new(_" Review ");
 	my $entry_path   = ::NewPrefEntry(OPT.'PathFile' => _"Save album info in:", width=>40);
@@ -92,7 +96,9 @@ sub prefbox {
 		$t = $t ? ::PangoEsc(_("example : ").$t) : "<i>".::PangoEsc(_"invalid pattern")."</i>";
 		return '<small>'.$t.'</small>';
 	});
-	my $chk_autosave = ::NewPrefCheckButton(OPT.'AutoSave' => _"Auto-save positive finds"); #, tip=>_"Only works when the review tab is displayed");
+	my $chk_autosave = ::NewPrefCheckButton(OPT.'AutoSave'=>_"Auto-save positive finds", cb=>sub {for my $sb (values %savebuttons) {
+		if ($_[0]->get_active)	{$sb->set_no_show_all(1); $sb->hide} 
+		else 			{$sb->set_no_show_all(0); $sb->parent->show_all}}});
 	$frame_review->add(::Vpack($entry_path,$lbl_preview,$chk_autosave));
 
 	my $frame_fields = Gtk2::Frame->new(_" Fields ");
@@ -113,7 +119,7 @@ sub prefbox {
 		push(@chk_show, ::NewPrefCheckButton(OPT.'Show'.$f->{short} => $f->{long})) if $f->{active};
 	}
 	$frame_layout->add(::Hpack(@chk_show));
-	return ::Vpack($hbox_picsize, $frame_review, $frame_fields, $frame_layout);
+	return ::Vpack(['_', $chk_picture, '-', [$btn_amg]], $frame_review, $frame_fields, $frame_layout);
 }
 
 
@@ -131,7 +137,7 @@ sub new {
 	$self->{fontsize} = $fontsize->get_size() / Gtk2::Pango->scale;
 
 	# Heading: cover and album info.
-	my $cover = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, maxsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show fullsize image", 
+	my $cover = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, maxsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show larger image", 
 		click1=>\&cover_popup, click3=>sub {::PopupAAContextMenu({self=>$_[0], field=>'album', ID=>$::SongID, gid=>Songs::Get_gid($::SongID,'album'), mode=>'P'});} });
 	my $statbox = Gtk2::VBox->new(0,0);
 	for my $name (qw/Ltitle Lstats/) {
@@ -148,6 +154,7 @@ sub new {
 	my $refreshbutton = ::NewIconButton('gtk-refresh', undef, sub { song_changed(::find_ancestor($_[0],__PACKAGE__),undef,undef,1); }, "none", _"Refresh");
 	my $savebutton	  = ::NewIconButton('gtk-save', undef, sub 
 		{my $self=::find_ancestor($_[0],__PACKAGE__); save_review(::GetSelID($self),$self->{fields})}, "none", _"Save review");
+	$savebuttons{$self} = $savebutton;
 	my $searchbutton = Gtk2::ToggleButton->new();
 	$searchbutton->set_relief('none');
 	$searchbutton->add(Gtk2::Image->new_from_stock('gtk-find','menu'));
@@ -155,7 +162,8 @@ sub new {
 		if ($_[0]->get_active()) {$self->manual_search()} else {$self->song_changed()}});
 	my $buttonbox = Gtk2::HBox->new();
 	$buttonbox->pack_end($searchbutton,0,0,0);
-	$buttonbox->pack_end($savebutton,0,0,0); # unless $::Options{OPT.'AutoSave'};
+	$buttonbox->pack_end($savebutton,0,0,0);
+	$savebutton->set_no_show_all(1) if $::Options{OPT.'AutoSave'};
 	$buttonbox->pack_end($refreshbutton,0,0,0);
 	$statbox->pack_end($buttonbox,0,0,0);
 	my $stateventbox = Gtk2::EventBox->new(); # To catch mouse events
@@ -164,8 +172,9 @@ sub new {
 	$stateventbox->signal_connect(button_press_event => sub {my ($stateventbox, $event) = @_; return 0 unless $event->button == 3; my $ID = ::GetSelID($stateventbox);
 		 ::PopupAAContextMenu({ self=>$stateventbox, mode=>'P', field=>'album', ID=>$ID, gid=>Songs::Get_gid($ID,'album') }) if defined $ID; return 1; } );
 	my $coverstatbox = Gtk2::HBox->new(0,0);
-	$coverstatbox->pack_start($cover,0,0,0);
+	$coverstatbox->pack_start($cover,0,0,0) if $::Options{OPT.'ShowCover'};
 	$coverstatbox->pack_end($stateventbox,1,1,5);
+	$boxandcovers{$self} = [$coverstatbox,$cover];
 
 	# For the review: a TextView in a ScrolledWindow in a HBox
 	my $textview = Gtk2::TextView->new();
@@ -201,18 +210,18 @@ sub new {
 	# Year is a 'Glib::String' to avoid printing "0" when year is missing. Caveat: will give wrong sort order for albums released before year 1000 or after year 9999 :)
 	my $store = Gtk2::ListStore->new('Glib::String','Glib::String','Glib::String','Glib::String','Glib::String','Glib::UInt'); # Album, Artist, Label, Year, URL, Sort order.
 	my $treeview = Gtk2::TreeView->new($store);
-	for (my $id = 0; $id <= $#cols; $id++) {
-		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$cols[$id]->{title}", Gtk2::CellRendererText->new(), text=>$id);
-		$column->set_sort_column_id($id); $column->set_resizable(1); $column->set_reorderable(1); $column->set_expand(1); 
+	for (my $id = 0; $id <= $#columns; $id++) {
+		my $column = Gtk2::TreeViewColumn->new_with_attributes(_"$columns[$id]->{title}", Gtk2::CellRendererText->new(), text=>$id);
+		$column->set_sort_column_id($id); $column->set_expand(1); $column->set_resizable(1); $column->set_reorderable(1); 
 		$column->set_sizing('fixed');
 		$column->set_fixed_width($::Options{OPT.'Column'.$id}->{width}) if $::Options{OPT.'Column'.$id}->{width};
 		my $visible = defined $::Options{OPT.'Column'.$id}->{visible} ? $::Options{OPT.'Column'.$id}->{visible} : 1;
 		my $order   = defined $::Options{OPT.'Column'.$id}->{order}   ? $::Options{OPT.'Column'.$id}->{order} : $id;
 		$column->set_visible($visible);
 		$treeview->insert_column($column,$order);
-		$cols[$id]->{col} = $column;
+		$columns[$id]->{col} = $column;
 		# Recreate the header label to be able to catch mouse clicks in column header:
-		my $label = Gtk2::Label->new(_"$cols[$id]->{title}"); $column->set_widget($label); $label->show();
+		my $label = Gtk2::Label->new(_"$columns[$id]->{title}"); $column->set_widget($label); $label->show();
 		my $button = $label->get_ancestor('Gtk2::Button'); # The header label is attached to a button by Gtk
 		$button->signal_connect(button_press_event => \&treeview_click_cb, $id) if $button;
 	}
@@ -243,7 +252,7 @@ sub new {
 	$self->pack_start($searchview,1,1,0);
 	$searchview->signal_connect(show => sub {$searchbutton->set_active(1)});
 	$searchview->signal_connect(hide => sub {$searchbutton->set_active(0)});
-	$self->signal_connect(destroy => sub {$_[0]->cancel()});
+	$self->signal_connect(destroy => sub {$_[0]->cancel(); delete $savebuttons{$_[0]}; delete $boxandcovers{$_[0]}});
 
 	# Save elements that will be needed in other methods.
 	$self->{buffer} = $textview->get_buffer();
@@ -322,9 +331,10 @@ sub cover_popup {
 	my ($self, $event) = @_;
 	my $menu = Gtk2::Menu->new();
 	$menu->modify_bg('GTK_STATE_NORMAL',Gtk2::Gdk::Color->parse('black')); # black bg for the cover-popup
+	my $picsize = 400;
 	my $ID = ::GetSelID($self);
 	my $aID = Songs::Get_gid($ID,'album');
-	if (my $img = Gtk2::Image->new_from_file(AAPicture::GetPicture('album',$aID))) {
+	if (my $img = AAPicture::newimg(album=>$aID,$picsize)) {
 		my $apic = Gtk2::MenuItem->new();
 		$apic->modify_bg('GTK_STATE_SELECTED',Gtk2::Gdk::Color->parse('black'));
 		$apic->add($img);
