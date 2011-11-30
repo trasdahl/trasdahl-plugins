@@ -21,8 +21,7 @@ widget. Album info is downloaded for the playing song. The context pane also sup
 defined in the layout file).
 
 The plugin must search AMG before it can download the album info. If it fetches the wrong album, the
-user can search AMG manually by clicking the "Manual search" button. A dialog window opens with the
-search results.
+user can search AMG manually by clicking the "Manual search" button. 
 
 The "Refresh" button makes a new, automatic AMG search, meaning that the plugin will pick the album
 (and ignore any albums the user have chosen with a manual search).
@@ -42,8 +41,14 @@ Standard fields -> mood/style/theme.
 
 VERSION HISTORY
 
-2011.09.20 v.0.11
+2011.11.30 v.0.2
 -Option to downlad reviews for all albums in prefrerences.
+-Use GtkTreeView for the search results.
+-Dynamically add/remove "Save"-button and cover image according to preferences.
+-Probably some other small bug fixes and cleanup.
+
+
+2011.09.20 v.0.11
 -Move manual search from separate window into context tab.
 -Fix bug in matching albums or artists with uppercase umlauts.
 -Save fields more efficiently.

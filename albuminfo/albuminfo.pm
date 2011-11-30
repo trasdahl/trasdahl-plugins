@@ -8,9 +8,10 @@
 =gmbplugin ALBUMINFO
 name	Albuminfo
 title	Albuminfo plugin
-version	0.11
+version	0.2
 author  Øystein Tråsdahl (based on the Artistinfo plugin)
 desc	Retrieves album-relevant information (review etc.) from allmusic.com.
+url	https://github.com/trasdahl/gmusicbrowser-plugins/
 =cut
 
 # TODO:
@@ -26,6 +27,8 @@ use Gtk2::Gdk::Keysyms;
 use base 'Gtk2::Box';
 use constant
 {	OPT	=> 'PLUGIN_ALBUMINFO_',
+	AMG_SEARCH_URL => 'http://allmusic.com/search/album/',
+	AMG_ALBUM_URL => 'http://allmusic.com/album/',
 };
 
 my @showfields =
@@ -69,8 +72,10 @@ my @ColumnMenu = # The order here must be the same as the order in @columns
 	{ label => _"Label",	check => sub {return $columns[2]->{col}->get_visible},	code => sub {my $c=$columns[2]->{col}; $c->set_visible(!$c->get_visible)}, },
 	{ label => _"Year",	check => sub {return $columns[3]->{col}->get_visible},	code => sub {my $c=$columns[3]->{col}; $c->set_visible(!$c->get_visible)}, },
 );
-my %savebuttons;
-my %boxandcovers;
+my %savebuttons;          # Needed for dynamically adding/removing "Save review"-buttons from layout.
+my %boxandcovers;         # Needed for dynamically adding/removing cover from layout.
+my @towrite;              # Needed to avoid progress bar overflow in save_fields when called from mass_download
+my $save_fields_lock = 0; # Needed to avoid progress bar overflow in save_fields when called from mass_download
 
 sub Start {
 	Layout::RegisterWidget(PluginAlbuminfo => $albuminfowidget);
@@ -81,11 +86,12 @@ sub Stop {
 }
 
 sub prefbox {
-	my $btn_amg      = ::NewIconButton('plugin-artistinfo-allmusic',undef, sub {::main::openurl("http://www.allmusic.com/"); },'none',_"Open allmusic.com in your web browser");
+	my $frame_pic    = Gtk2::Frame->new(_" Cover ");
 	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text1=>_"Cover Size : ", text2=>_"(applied after restart)");
-	my $chk_picture  = ::NewPrefCheckButton(OPT.'ShowCover'=>_"Show cover", widget=>$spin_picsize, cb=>sub {for my $boxandcover (values %boxandcovers) {
-		if ($_[0]->get_active)	{$boxandcover->[0]->pack_start($boxandcover->[1],0,0,0); $boxandcover->[1]->show()}
+	my $chk_pic      = ::NewPrefCheckButton(OPT.'ShowCover'=>_"Show cover", widget=>$spin_picsize, cb=>sub {for my $boxandcover (values %boxandcovers) {
+		if ($_[0]->get_active)	{$boxandcover->[0]->pack_start($boxandcover->[1],0,0,0); $boxandcover->[0]->show()}
 		else			{$boxandcover->[0]->remove($boxandcover->[1])}}});
+	$frame_pic->add($chk_pic);
 
 	my $frame_review = Gtk2::Frame->new(_" Review ");
 	my $entry_path   = ::NewPrefEntry(OPT.'PathFile' => _"Save album info in:", width=>40);
@@ -93,7 +99,7 @@ sub prefbox {
 	{	return '' unless defined $::SongID;
 		my $t = ::pathfilefromformat( $::SongID, $::Options{OPT.'PathFile'}, undef,1);
 		$t = ::filename_to_utf8displayname($t) if $t;
-		$t = $t ? ::PangoEsc(_("example : ").$t) : "<i>".::PangoEsc(_"invalid pattern")."</i>";
+		$t = $t ? ::PangoEsc(_("Example : ").$t) : "<i>".::PangoEsc(_"Invalid pattern")."</i>";
 		return '<small>'.$t.'</small>';
 	});
 	my $chk_autosave = ::NewPrefCheckButton(OPT.'AutoSave'=>_"Auto-save positive finds", cb=>sub {for my $sb (values %savebuttons) {
@@ -102,7 +108,7 @@ sub prefbox {
 	$frame_review->add(::Vpack($entry_path,$lbl_preview,$chk_autosave));
 
 	my $frame_fields = Gtk2::Frame->new(_" Fields ");
-	my $chk_join = ::NewPrefCheckButton(OPT.'StyleAsGenre' => _"Include Styles in Genres", tip=>_"Allmusic uses both Genres and Styles to describe albums. If you use only Genres, you may want to include Styles in the list of Genres.");
+	my $chk_join = ::NewPrefCheckButton(OPT.'StyleAsGenre' => _"Include Styles in Genres", tip=>_"Allmusic uses both Genres and Styles to describe albums. If you use only Genres, you may want to include Styles in allmusic's list of Genres.");
 	my @chk_fields;
 	for my $field (qw(genre mood style theme)) {
 		push(@chk_fields, ::NewPrefCheckButton(OPT.$field=>_(ucfirst($field)."s"), tip=>_"Note: inactive fields must be enabled by the user in the 'Fields' tab in Settings"));
@@ -110,7 +116,7 @@ sub prefbox {
 	}
 	my ($radio_add,$radio_rpl) = ::NewPrefRadio(OPT.'ReplaceFields',undef,_"Add to existing values",1,_"Replace existing values",0);
 	my $chk_saveflds = ::NewPrefCheckButton(OPT.'SaveFields'=>_"Auto-save fields with data from allmusic", widget=>::Vpack(\@chk_fields, $radio_add, $radio_rpl),
-		tip=>_"Save selected fields for all tracks on the same album whenever album data is loaded from AMG or from file.");
+		tip=>_"Save selected fields for all tracks on the same album whenever album data is loaded from allmusic or from file.");
 	$frame_fields->add(::Vpack($chk_join, $chk_saveflds));
 
 	my $frame_layout = Gtk2::Frame->new(_" Context pane layout ");
@@ -118,10 +124,42 @@ sub prefbox {
 	for my $f (@showfields) {
 		push(@chk_show, ::NewPrefCheckButton(OPT.'Show'.$f->{short} => $f->{long})) if $f->{active};
 	}
-	$frame_layout->add(::Hpack(@chk_show));
-	return ::Vpack(['_', $chk_picture, '-', [$btn_amg]], $frame_review, $frame_fields, $frame_layout);
+	$frame_layout->add(::Hpack([@chk_show[0..1]], [@chk_show[2..3]], [@chk_show[4..5]], [@chk_show[6..7]]));
+
+	my $btn_download = bless Gtk2::Button->new(_"Download");
+	$btn_download->set_tooltip_text(_"Fields will be saved according to the settings above. Albuminfo files will be re-read if there are fields to be saved and you choose 'albums missing reviews' in the combo box.");
+	my $cmb_download = ::NewPrefCombo(OPT.'mass_download',  {all=>'entire collection', missing=>'albums missing reviews'}, text=>'album information now for');
+	$btn_download->signal_connect(clicked => \&mass_download);
+	return ::Vpack($frame_pic, $frame_review, $frame_fields, $frame_layout, [$btn_download,$cmb_download]);
 }
 
+sub mass_download {
+	my $self = ::find_ancestor($_[0], __PACKAGE__);
+	warn "Albuminfo: starting mass download of albuminfo.\n" if $::debug;
+	my @aIDs = @{Songs::Get_all_gids('album')};
+	my $progress = 0;
+	my $end = scalar(@aIDs);
+	my $abort;
+	::Progress('albuminfo', end=>$end, abortcb=>sub {$abort=1; ::Progress('albuminfo', abort=>1)}, aborthint=>_"Stop fetching albuminfo", title=>_"0/$end albums");
+	foreach my $aID (@aIDs) {
+		my $IDs = Songs::MakeFilterFromGID('album',$aID)->filter();
+		my $ID  = $IDs->[0]; # Need a track (any track) from the album: pick the first in the list.
+		my ($artist,$album) = Songs::Get($ID, qw/artist album/);
+		unless ($album) {::Progress('albuminfo', current=>++$progress, title=>_"$progress/$end albums"); next}
+		my $file = ::pathfilefromformat($ID, $::Options{OPT.'PathFile'}, undef, 1);
+		if ($::Options{OPT.'mass_download'} ne 'all' && $file && -r $file) {
+			$self->load_file($ID,0,$file) if $::Options{OPT.'SaveFields'};
+			::Progress('albuminfo', current=>++$progress, title=>_"$progress/$end albums");
+		} else {
+			my $url = AMG_SEARCH_URL.::url_escapeall($album);
+			warn "Albuminfo: fetching search results from $url\n" if $::debug;
+			# TODO: $self->cancel() calls $self->{waiting}->abort. Can this disturb the mass download?
+			$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {
+				if ($abort) {$self->cancel()}
+				else        {$self->load_search_results($ID,0,@_); ::Progress('albuminfo', current=>++$progress, title=>_"$progress/$end albums")}});
+		}
+	}
+}
 
 
 #####################################################################
@@ -444,10 +482,10 @@ sub new_search {
 	my $album = $self->{search}->get_text();
 	$album =~ s|^\s+||; $album =~ s|\s+$||; # remove leading and trailing spaces
 	return if $album eq '';
-	my $url = "http://allmusic.com/search/album/".::url_escapeall($album);
+	my $url = AMG_SEARCH_URL.::url_escapeall($album);
 	$self->cancel();
 	$self->{store}->clear();
-	warn "Albuminfo: fetching AMG search from url $url.\n" if $::debug;
+	warn "Albuminfo: fetching search results from $url.\n" if $::debug;
 	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->print_results(@_)},url=>$url, cache=>1);
 }
 
@@ -466,11 +504,11 @@ sub entry_selected_cb {
 	my ($path, $column) = $self->{treeview}->get_cursor();
 	unless (defined $path) {$self->{searchview}->hide(); $self->{infoview}->show(); return} # The user may click OK before selecting an album
 	my $store = $self->{treeview}->{store};
-	$self->{url} = $store->get($store->get_iter($path),4);
-	warn "Albuminfo: fetching review from url $self->{url}\n" if $::debug;
+	my $url = $store->get($store->get_iter($path),4);
+	warn "Albuminfo: fetching review from $url\n" if $::debug;
 	$self->cancel();
 	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->{searchview}->hide(); $self->{infoview}->show();
-		$self->load_review(::GetSelID($self),@_)}, url=>$self->{url}, cache=>1);
+		$self->load_review(::GetSelID($self),1,$url,@_)}, url=>$url, cache=>1);
 }
 
 
@@ -505,17 +543,17 @@ sub album_changed {
 	$self->update_titlebox($aID);
 	my $album = ::url_escapeall(Songs::Gid_to_Get("album",$aID));
 	unless (length($album)) {$self->print_warning(_"Unknown album"); return}
-	my $url = "http://allmusic.com/search/album/$album";
+	my $url = AMG_SEARCH_URL.$album;
 	$self->print_warning(_"Loading...");
 	unless ($force) { # Try loading from file.
 		my $file = ::pathfilefromformat( ::GetSelID($self), $::Options{OPT.'PathFile'}, undef, 1 );
 		if ($file && -r $file) {
-			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,$file);
+			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,1,$file);
 			return;
 		}
 	}
-	warn "Albuminfo: fetching search results from url $url\n" if $::debug;
-	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,@_)}, url=>$url, cache=>1);
+	warn "Albuminfo: fetching search results from $url\n" if $::debug;
+	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,1,@_)}, url=>$url, cache=>1);
 }
 
 sub update_titlebox {
@@ -534,16 +572,15 @@ sub update_titlebox {
 }
 
 sub load_search_results {
-	my ($self,$ID,$html,$type) = @_;
+	my ($self,$ID,$print,$html,$type) = @_;
 	delete $self->{waiting};
-	my $result = parse_amg_search_results($html, $type);
+	my $result = parse_amg_search_results($html, $type); # $result[$i] = {url, album, artist, label, year}
 	my ($artist,$year) = ::Songs::Get($ID, qw/artist year/);
 	my $url;
 	for my $entry (@$result) {
 		# Pick the first entry with the right artist and year, or if not: just the right artist.
-		# if (::superlc($entry->{artist}) eq ::superlc($artist)) {
 		if ($entry->{artist} =~ m|$artist|i || $artist =~ m|$entry->{artist}|i) {
-			if (!$url || $entry->{year} == $year) {
+			if (!$url || $year && $entry->{year} && $entry->{year} == $year) {
 				warn "Albuminfo: AMG hit: $entry->{album} by $entry->{artist} from year=$entry->{year} ($entry->{url})\n" if $::debug;
 				$url = $entry->{url}."/review";
 			}
@@ -551,24 +588,24 @@ sub load_search_results {
 		}
 	}
 	if ($url) {
-		$self->{url} = $url;
-		warn "Albuminfo: fetching review from url $url\n" if $::debug;
-		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,@_)}, url=>$url, cache=>1);
+		warn "Albuminfo: fetching review from $url\n" if $::debug;
+		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,$print,$url,@_)}, url=>$url, cache=>1);
 	} else {
 		$self->{fields} = {};
-		$self->print_warning(_"No review found");
+		$self->print_warning(_"No review found") if $print;
 	}	
 }
 
 sub load_review {
-	my ($self,$ID,$html,$type) = @_;
+	my ($self,$ID,$print,$url,$html,$type) = @_;
 	delete $self->{waiting};
 	$self->{fields} = parse_amg_album_page($html,$type);
-	$self->{fields}{url} = $self->{url}; # So that url gets stored if AutoSave is chosen.
-	$self->print_review();
-	save_review($ID, $self->{fields}) if $::Options{OPT.'AutoSave'};
-	save_fields($ID, $self->{fields}) if $::Options{OPT.'SaveFields'};
+	$self->{fields}{url} = $url; # So that url gets stored if AutoSave is chosen.
+	$self->print_review() if $print;
+	save_review($ID, $self->{fields}) if $::Options{OPT.'AutoSave'} || $print==0; # $print==0 means we come from mass_download, so save review.
+	if ($::Options{OPT.'SaveFields'}) {push(@towrite, [$ID, %{$self->{fields}}]); save_fields()}
 }
+
 
 sub parse_amg_search_results {
 	my ($html,$type) = @_;
@@ -578,8 +615,8 @@ sub parse_amg_search_results {
 	my @res = $html =~ m|<a href="(http://allmusic\.com/album.*?)">(.*?)</a></td>\s.*?<td>(.*?)</td>\s.*?<td>(.*?)</td>\s.*?<td>(.*?)</td>|g;
 	my @fields = qw/url album artist label year/;
 	my @result;
-	my $i = 0; # Used to sort the hits in manual search
-	push(@result, {%_, order=>$i++}) while (@_{@fields} = splice(@res, 0, 5)); # create an array of hash refs
+	my $order = 0; # Used to sort the hits in manual search
+	push(@result, {%_, order=>$order++}) while (@_{@fields} = splice(@res, 0, 5)); # create an array of hash refs
 	return \@result;
 }
 
@@ -627,14 +664,14 @@ sub decode {
 	$html = Encode::decode($encoding,$html) if $encoding;
 	$html = ::decode_html($html) if ($encoding eq 'utf-8');
 	return $html;
-}	
+}
 
 # Load review from file
 sub load_file {
-	my ($self,$ID,$file) = @_;
-	warn "Albuminfo: loading review from file $file\n" if $::debug;
+	my ($self,$ID,$print,$file) = @_;
 	$self->{fields} = {};
 	if ( open(my$fh, '<', $file) ) {
+		warn "Albuminfo: loading review from file $file\n" if $::debug;
 		local $/ = undef; #slurp mode
 		my $text = <$fh>;
 		if (my $utf8 = Encode::decode_utf8($text)) {$text = $utf8}
@@ -649,16 +686,14 @@ sub load_file {
 			}
 		}
 		close $fh;
+		if ($::Options{OPT.'StyleAsGenre'} && $self->{fields}->{style}) {@{$self->{fields}->{genre}} = ::uniq(@{$self->{fields}->{style}}, @{$self->{fields}->{genre}})}
+		$self->print_review() if $print;
+		if ($::Options{OPT.'SaveFields'}) {push(@towrite, [$ID, %{$self->{fields}}]); save_fields()} # We may not have saved when first downloaded.
 	} else {
 		warn "Albuminfo: failed retrieving info from $file\n" if $::debug;
-		$self->print_warning(_"No review found");
-		$self->fields = {};
+		$self->print_warning(_"No review found") if $print;
 	}
-	if ($::Options{OPT.'StyleAsGenre'} && $self->{fields}->{style}) {@{$self->{fields}->{genre}} = ::uniq(@{$self->{fields}->{style}}, @{$self->{fields}->{genre}})}
-	$self->print_review();
-	save_fields($ID, $self->{fields}) if $::Options{OPT.'SaveFields'}; # We may not have saved when first downloaded.
 }
-
 
 # Save review to file. The format of the file is: <field>values</field>
 sub save_review {
@@ -686,19 +721,28 @@ sub save_review {
 
 # Save selected fields (moods, styles etc.) for all tracks in album
 sub save_fields {
-	my ($ID,$fields) = @_;
+	return if $save_fields_lock;
+	return unless scalar(@towrite);
+	my ($ID,%fields) = @{shift(@towrite)};
+	my $album = Songs::Gid_to_Get("album", Songs::Get_gid($ID,'album'));
+	warn "Albuminfo: Saving tracks on $album (".scalar(@towrite)." album".(scalar(@towrite)!=1 ? "s" : "")." in queue).\n" if $::debug;
 	my $IDs = Songs::MakeFilterFromGID('album', Songs::Get_gid($ID,'album'))->filter(); # Songs on this album
 	my @updated_fields;
-	for my $key (keys %{$fields}) {
-		if ($key =~ m/genre|mood|style|theme/ && $::Options{OPT.$key} && $fields->{$key}) {
+	for my $key (keys %fields) {
+		if ($key =~ m/genre|mood|style|theme/ && $::Options{OPT.$key} && $fields{$key}) {
 			if ( $::Options{OPT.'ReplaceFields'} ) {
-				push(@updated_fields, $key, $fields->{$key});
+				push(@updated_fields, $key, $fields{$key});
 			} else {
-				push(@updated_fields, '+'.$key, $fields->{$key});
+				push(@updated_fields, '+'.$key, $fields{$key});
 			}
 		}		
 	}
-	Songs::Set($IDs, \@updated_fields) if @updated_fields;
+	if (@updated_fields) {
+		$save_fields_lock = 1;
+		Songs::Set($IDs, \@updated_fields, callback_finish=>sub {$save_fields_lock = 0; save_fields();});
+	} else {
+		save_fields(); # There may still be albums in @towrite
+	}
 }
 
 # Cancel pending tasks, and abort possible http_wget in progress.
