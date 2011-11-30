@@ -1,9 +1,9 @@
-ALBUMINFO VERSION 0.1
+ALBUMINFO VERSION 0.2
 
 Albuminfo is a gmusicbrowser plugin for retrieving album-relevant information (such as reviews) from
 allmusic.com (AMG).
 
-It has only been tested with version 1.1.7 of gmusicbrowser.
+It has only been tested with versions 1.1.7 and 1.1.8 of gmusicbrowser.
 
 
 INSTALLATION
@@ -16,7 +16,7 @@ Restart gmusicbrowser.
 
 USAGE
 
-Enable the plugin in Prefereneces -> Plugins. The plugin creates a new tab in the "Context"
+Enable the plugin in Preferences -> Plugins. The plugin creates a new tab in the "Context"
 widget. Album info is downloaded for the playing song. The context pane also supports groups (as
 defined in the layout file).
 
@@ -42,7 +42,7 @@ Standard fields -> mood/style/theme.
 VERSION HISTORY
 
 2011.11.30 v.0.2
--Option to downlad reviews for all albums in prefrerences.
+-Option to download reviews for all albums in preferences.
 -Use GtkTreeView for the search results.
 -Dynamically add/remove "Save"-button and cover image according to preferences.
 -Probably some other small bug fixes and cleanup.
