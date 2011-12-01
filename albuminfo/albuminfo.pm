@@ -76,6 +76,7 @@ my %savebuttons;          # Needed for dynamically adding/removing "Save review"
 my %boxandcovers;         # Needed for dynamically adding/removing cover from layout.
 my @towrite;              # Needed to avoid progress bar overflow in save_fields when called from mass_download
 my $save_fields_lock = 0; # Needed to avoid progress bar overflow in save_fields when called from mass_download
+my $abort;
 
 sub Start {
 	Layout::RegisterWidget(PluginAlbuminfo => $albuminfowidget);
@@ -129,35 +130,35 @@ sub prefbox {
 	my $btn_download = bless Gtk2::Button->new(_"Download");
 	$btn_download->set_tooltip_text(_"Fields will be saved according to the settings above. Albuminfo files will be re-read if there are fields to be saved and you choose 'albums missing reviews' in the combo box.");
 	my $cmb_download = ::NewPrefCombo(OPT.'mass_download',  {all=>'entire collection', missing=>'albums missing reviews'}, text=>'album information now for');
-	$btn_download->signal_connect(clicked => \&mass_download);
+	$btn_download->signal_connect(clicked => sub {
+		my $aIDs = Songs::Get_all_gids('album');
+		$abort = 0;
+		::Progress('albuminfo', end=>scalar(@$aIDs), abortcb=>sub {$abort=1; ::Progress('albuminfo', abort=>1)}, aborthint=>_"Stop fetching albuminfo", title=>_"Fetching albuminfo");
+		mass_download(::find_ancestor($_[0], __PACKAGE__), $aIDs, 0);
+	} );
 	return ::Vpack($frame_pic, $frame_review, $frame_fields, $frame_layout, [$btn_download,$cmb_download]);
 }
 
 sub mass_download {
-	my $self = ::find_ancestor($_[0], __PACKAGE__);
-	warn "Albuminfo: starting mass download of albuminfo.\n" if $::debug;
-	my @aIDs = @{Songs::Get_all_gids('album')};
-	my $progress = 0;
-	my $end = scalar(@aIDs);
-	my $abort;
-	::Progress('albuminfo', end=>$end, abortcb=>sub {$abort=1; ::Progress('albuminfo', abort=>1)}, aborthint=>_"Stop fetching albuminfo", title=>_"0/$end albums");
-	foreach my $aID (@aIDs) {
-		my $IDs = Songs::MakeFilterFromGID('album',$aID)->filter();
-		my $ID  = $IDs->[0]; # Need a track (any track) from the album: pick the first in the list.
-		my ($artist,$album) = Songs::Get($ID, qw/artist album/);
-		unless ($album) {::Progress('albuminfo', current=>++$progress, title=>_"$progress/$end albums"); next}
-		my $file = ::pathfilefromformat($ID, $::Options{OPT.'PathFile'}, undef, 1);
-		if ($::Options{OPT.'mass_download'} ne 'all' && $file && -r $file) {
-			$self->load_file($ID,0,$file) if $::Options{OPT.'SaveFields'};
-			::Progress('albuminfo', current=>++$progress, title=>_"$progress/$end albums");
-		} else {
-			my $url = AMG_SEARCH_URL.::url_escapeall($album);
-			warn "Albuminfo: fetching search results from $url\n" if $::debug;
-			# TODO: $self->cancel() calls $self->{waiting}->abort. Can this disturb the mass download?
-			$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {
-				if ($abort) {$self->cancel()}
-				else        {$self->load_search_results($ID,0,@_); ::Progress('albuminfo', current=>++$progress, title=>_"$progress/$end albums")}});
-		}
+	my ($self,$aIDs,$progress) = @_;
+	return if $progress > $#$aIDs;
+	my $aID = $aIDs->[$progress++];
+	::Progress('albuminfo', current=>$progress, bartext=>"$progress / ".scalar(@$aIDs));
+	my $IDs = Songs::MakeFilterFromGID('album',$aID)->filter();
+	my $ID  = $IDs->[0]; # Need a track (any track) from the album: pick the first in the list.
+	my $album = Songs::Get($ID, 'album');
+	unless ($album) {$self->mass_download($aIDs, $progress); return}
+	my $file = ::pathfilefromformat($ID, $::Options{OPT.'PathFile'}, undef, 1);
+	if ($::Options{OPT.'mass_download'} ne 'all' && $file && -r $file) {
+		$self->load_file($ID,0,$file) if $::Options{OPT.'SaveFields'}; # Load file to save selected fields
+		$self->mass_download($aIDs, $progress);
+	} else {
+		my $url = AMG_SEARCH_URL.::url_escapeall($album);
+		warn "Albuminfo: fetching search results from $url\n" if $::debug;
+		# TODO: $self->cancel() calls $self->{waiting}->abort. Should we use a different variables here and in album_changed? 
+		$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {
+			if ($abort) {delete $self->{waiting}; $self->cancel()}
+			else        {$self->load_search_results($ID,0,@_); $self->mass_download($aIDs, $progress);}});
 	}
 }
 
