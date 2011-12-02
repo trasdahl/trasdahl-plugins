@@ -39,6 +39,12 @@ the album. NOTE: GENRES IS THE ONLY FIELD EXISTING AND ENABLED IN GMUSICBROWSER 
 Standard fields -> mood/style/theme. 
 
 
+TROUBLESHOOTING
+To get some debug information pertaining this plugin, start gmusicbrowser from terminal with the 
+commando
+                     gmusicbrowser.pl -debug 2> >(grep -i albuminfo) &      
+
+
 VERSION HISTORY
 
 2011.11.30 v.0.2
