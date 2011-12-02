@@ -45,6 +45,7 @@ my @showfields =
 );
 
 ::SetDefaultOptions(OPT, PathFile  	=> "~/.config/gmusicbrowser/review/%a - %l.txt",
+			 ShowCover	=> 1,
 			 CoverSize	=> 100,
 			 StyleAsGenre	=> 0,
 );
@@ -130,35 +131,42 @@ sub prefbox {
 	my $btn_download = bless Gtk2::Button->new(_"Download");
 	$btn_download->set_tooltip_text(_"Fields will be saved according to the settings above. Albuminfo files will be re-read if there are fields to be saved and you choose 'albums missing reviews' in the combo box.");
 	my $cmb_download = ::NewPrefCombo(OPT.'mass_download',  {all=>'entire collection', missing=>'albums missing reviews'}, text=>'album information now for');
-	$btn_download->signal_connect(clicked => sub {
-		my $aIDs = Songs::Get_all_gids('album');
-		$abort = 0;
-		::Progress('albuminfo', end=>scalar(@$aIDs), abortcb=>sub {$abort=1; ::Progress('albuminfo', abort=>1)}, aborthint=>_"Stop fetching albuminfo", title=>_"Fetching albuminfo");
-		mass_download(::find_ancestor($_[0], __PACKAGE__), $aIDs, 0);
-	} );
+	$btn_download->signal_connect(clicked => \&mass_download); 
 	return ::Vpack($frame_pic, $frame_review, $frame_fields, $frame_layout, [$btn_download,$cmb_download]);
 }
 
 sub mass_download {
-	my ($self,$aIDs,$progress) = @_;
-	return if $progress > $#$aIDs;
-	my $aID = $aIDs->[$progress++];
-	::Progress('albuminfo', current=>$progress, bartext=>"$progress / ".scalar(@$aIDs));
+	my $self = ::find_ancestor($_[0], __PACKAGE__); 
+	$self->{aIDs} = Songs::Get_all_gids('album');
+	$self->{end} = scalar(@{$self->{aIDs}});
+	$self->{progress} = 0;
+	$self->{abort} = 0;
+	::Progress('albuminfo', end=>$self->{end}, aborthint=>_"Stop fetching albuminfo", title=>_"Fetching albuminfo", 
+		abortcb=>sub {$self->{abort}=1; $self->cancel(); ::Progress('albuminfo', abort=>1)});
+	::IdleDo('9_download_one'.$self, undef, \&download_one, $self);
+}
+
+sub download_one {
+	my ($self) = @_;
+	return if $self->{progress} >= $self->{end} || $self->{abort};
+	my $aID = $self->{aIDs}->[$self->{progress}++];
+	warn "Albuminfo: mass download in progress... $self->{progress}/$self->{end}\n" if $::debug;
+	::Progress('albuminfo', current=>$self->{progress}, bartext=>"$self->{progress} / $self->{end}");
 	my $IDs = Songs::MakeFilterFromGID('album',$aID)->filter();
 	my $ID  = $IDs->[0]; # Need a track (any track) from the album: pick the first in the list.
 	my $album = Songs::Get($ID, 'album');
-	unless ($album) {$self->mass_download($aIDs, $progress); return}
+	unless ($album) {::IdleDo('9_download_one'.$self, undef, \&download_one, $self); return}
 	my $file = ::pathfilefromformat($ID, $::Options{OPT.'PathFile'}, undef, 1);
 	if ($::Options{OPT.'mass_download'} ne 'all' && $file && -r $file) {
-		$self->load_file($ID,0,$file) if $::Options{OPT.'SaveFields'}; # Load file to save selected fields
-		$self->mass_download($aIDs, $progress);
+		if ($::Options{OPT.'SaveFields'}) {
+			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,$file,1,\&download_one);
+		} else {
+			::IdleDo('9_download_one'.$self, undef, \&download_one, $self);
+		}
 	} else {
 		my $url = AMG_SEARCH_URL.::url_escapeall($album);
 		warn "Albuminfo: fetching search results from $url\n" if $::debug;
-		# TODO: $self->cancel() calls $self->{waiting}->abort. Should we use a different variables here and in album_changed? 
-		$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {
-			if ($abort) {delete $self->{waiting}; $self->cancel()}
-			else        {$self->load_search_results($ID,0,@_); $self->mass_download($aIDs, $progress);}});
+		$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {$self->load_search_results($ID,1,\&download_one,@_)});
 	}
 }
 
@@ -509,7 +517,7 @@ sub entry_selected_cb {
 	warn "Albuminfo: fetching review from $url\n" if $::debug;
 	$self->cancel();
 	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->{searchview}->hide(); $self->{infoview}->show();
-		$self->load_review(::GetSelID($self),1,$url,@_)}, url=>$url, cache=>1);
+		$self->load_review(::GetSelID($self),0,$url,@_)}, url=>$url, cache=>1);
 }
 
 
@@ -549,12 +557,12 @@ sub album_changed {
 	unless ($force) { # Try loading from file.
 		my $file = ::pathfilefromformat( ::GetSelID($self), $::Options{OPT.'PathFile'}, undef, 1 );
 		if ($file && -r $file) {
-			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,1,$file);
+			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,$file,0,undef);
 			return;
 		}
 	}
 	warn "Albuminfo: fetching search results from $url\n" if $::debug;
-	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,1,@_)}, url=>$url, cache=>1);
+	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,0,undef,@_)}, url=>$url, cache=>1);
 }
 
 sub update_titlebox {
@@ -573,7 +581,7 @@ sub update_titlebox {
 }
 
 sub load_search_results {
-	my ($self,$ID,$print,$html,$type) = @_;
+	my ($self,$ID,$md,$cb,$html,$type) = @_; # $md = 1 if mass_download, 0 otherwise. $cb = callback function = download_one if mass_download.
 	delete $self->{waiting};
 	my $result = parse_amg_search_results($html, $type); # $result[$i] = {url, album, artist, label, year}
 	my ($artist,$year) = ::Songs::Get($ID, qw/artist year/);
@@ -582,7 +590,7 @@ sub load_search_results {
 		# Pick the first entry with the right artist and year, or if not: just the right artist.
 		if ($entry->{artist} =~ m|$artist|i || $artist =~ m|$entry->{artist}|i) {
 			if (!$url || $year && $entry->{year} && $entry->{year} == $year) {
-				warn "Albuminfo: AMG hit: $entry->{album} by $entry->{artist} from year=$entry->{year} ($entry->{url})\n" if $::debug;
+				warn "Albuminfo: hit in search results: $entry->{album} by $entry->{artist} from $entry->{year} ($entry->{url})\n" if $::debug;
 				$url = $entry->{url}."/review";
 			}
 			last if $year && $entry->{year} && $entry->{year} == $year;
@@ -590,21 +598,23 @@ sub load_search_results {
 	}
 	if ($url) {
 		warn "Albuminfo: fetching review from $url\n" if $::debug;
-		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,$print,$url,@_)}, url=>$url, cache=>1);
+		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,$md,$cb,$url,@_)}, url=>$url, cache=>1);
 	} else {
 		$self->{fields} = {};
-		$self->print_warning(_"No review found") if $print;
+		warn "Albuminfo: album not found in search results\n" if $::debug;
+		$self->print_warning(_"No review found") unless $md;
+		::IdleDo('9_download_one'.$self, undef, $cb, $self) if $cb;
 	}	
 }
 
 sub load_review {
-	my ($self,$ID,$print,$url,$html,$type) = @_;
+	my ($self,$ID,$md,$cb,$url,$html,$type) = @_;
 	delete $self->{waiting};
-	$self->{fields} = parse_amg_album_page($html,$type);
-	$self->{fields}{url} = $url; # So that url gets stored if AutoSave is chosen.
-	$self->print_review() if $print;
-	save_review($ID, $self->{fields}) if $::Options{OPT.'AutoSave'} || $print==0; # $print==0 means we come from mass_download, so save review.
+	$self->{fields} = parse_amg_album_page($url, decode($html,$type));
+	$self->print_review() unless $md;
+	save_review($ID, $self->{fields}) if $::Options{OPT.'AutoSave'} || $md;
 	if ($::Options{OPT.'SaveFields'}) {push(@towrite, [$ID, %{$self->{fields}}]); save_fields()}
+	::IdleDo('9_download_one'.$self, undef, $cb, $self) if $cb;
 }
 
 
@@ -622,10 +632,10 @@ sub parse_amg_search_results {
 }
 
 sub parse_amg_album_page {
-	my ($html,$type) = @_;
-	$html = decode($html, $type);
+	my ($url,$html) = @_;
 	$html =~ s|\n| |g;
 	my $result = {};
+	$result->{url} = $url;
 	$result->{author} = $1 if $html =~ m|<p class="author">by (.*?)</p>|;
 	$result->{review} = $1 if $html =~ m|<p class="text">(.*?)</p>|;
 	if ($result->{review}) {
@@ -669,7 +679,7 @@ sub decode {
 
 # Load review from file
 sub load_file {
-	my ($self,$ID,$print,$file) = @_;
+	my ($self,$ID,$file,$md,$cb) = @_;
 	$self->{fields} = {};
 	if ( open(my$fh, '<', $file) ) {
 		warn "Albuminfo: loading review from file $file\n" if $::debug;
@@ -688,12 +698,13 @@ sub load_file {
 		}
 		close $fh;
 		if ($::Options{OPT.'StyleAsGenre'} && $self->{fields}->{style}) {@{$self->{fields}->{genre}} = ::uniq(@{$self->{fields}->{style}}, @{$self->{fields}->{genre}})}
-		$self->print_review() if $print;
+		$self->print_review() unless $md;
 		if ($::Options{OPT.'SaveFields'}) {push(@towrite, [$ID, %{$self->{fields}}]); save_fields()} # We may not have saved when first downloaded.
 	} else {
 		warn "Albuminfo: failed retrieving info from $file\n" if $::debug;
-		$self->print_warning(_"No review found") if $print;
+		$self->print_warning(_"No review found") unless $md;
 	}
+	::IdleDo('9_download_one'.$self, undef, $cb, $self) if $cb;
 }
 
 # Save review to file. The format of the file is: <field>values</field>
