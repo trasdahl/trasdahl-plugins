@@ -77,7 +77,7 @@ my %savebuttons;          # Needed for dynamically adding/removing "Save review"
 my %boxandcovers;         # Needed for dynamically adding/removing cover from layout.
 my @towrite;              # Needed to avoid progress bar overflow in save_fields when called from mass_download
 my $save_fields_lock = 0; # Needed to avoid progress bar overflow in save_fields when called from mass_download
-my $abort;
+
 
 sub Start {
 	Layout::RegisterWidget(PluginAlbuminfo => $albuminfowidget);
@@ -88,12 +88,12 @@ sub Stop {
 }
 
 sub prefbox {
-	my $frame_pic    = Gtk2::Frame->new(_" Cover ");
+	my $frame_cover  = Gtk2::Frame->new(_" Cover ");
 	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text1=>_"Cover Size : ", text2=>_"(applied after restart)");
 	my $chk_pic      = ::NewPrefCheckButton(OPT.'ShowCover'=>_"Show cover", widget=>$spin_picsize, cb=>sub {for my $boxandcover (values %boxandcovers) {
 		if ($_[0]->get_active)	{$boxandcover->[0]->pack_start($boxandcover->[1],0,0,0); $boxandcover->[0]->show()}
 		else			{$boxandcover->[0]->remove($boxandcover->[1])}}});
-	$frame_pic->add($chk_pic);
+	$frame_cover->add($chk_pic);
 
 	my $frame_review = Gtk2::Frame->new(_" Review ");
 	my $entry_path   = ::NewPrefEntry(OPT.'PathFile' => _"Save album info in:", width=>40);
@@ -130,13 +130,13 @@ sub prefbox {
 
 	my $btn_download = bless Gtk2::Button->new(_"Download");
 	$btn_download->set_tooltip_text(_"Fields will be saved according to the settings above. Albuminfo files will be re-read if there are fields to be saved and you choose 'albums missing reviews' in the combo box.");
-	my $cmb_download = ::NewPrefCombo(OPT.'mass_download',  {all=>'entire collection', missing=>'albums missing reviews'}, text=>'album information now for');
+	my $cmb_download = ::NewPrefCombo(OPT.'mass_download',  {all=>_"entire collection", missing=>_"albums missing reviews"}, text=>_"album information now for");
 	$btn_download->signal_connect(clicked => \&mass_download); 
-	return ::Vpack($frame_pic, $frame_review, $frame_fields, $frame_layout, [$btn_download,$cmb_download]);
+	return ::Vpack($frame_cover, $frame_review, $frame_fields, $frame_layout, [$btn_download,$cmb_download]);
 }
 
 sub mass_download {
-	my $self = ::find_ancestor($_[0], __PACKAGE__); 
+	my $self = ::find_ancestor($_[0], __PACKAGE__);
 	$self->{aIDs} = Songs::Get_all_gids('album');
 	$self->{end} = scalar(@{$self->{aIDs}});
 	$self->{progress} = 0;
@@ -148,10 +148,10 @@ sub mass_download {
 
 sub download_one {
 	my ($self) = @_;
+	::Progress('albuminfo', current=>$self->{progress}, bartext=>($self->{progress}+1)." / $self->{end}");
 	return if $self->{progress} >= $self->{end} || $self->{abort};
 	my $aID = $self->{aIDs}->[$self->{progress}++];
 	warn "Albuminfo: mass download in progress... $self->{progress}/$self->{end}\n" if $::debug;
-	::Progress('albuminfo', current=>$self->{progress}, bartext=>"$self->{progress} / $self->{end}");
 	my $IDs = Songs::MakeFilterFromGID('album',$aID)->filter();
 	my $ID  = $IDs->[0]; # Need a track (any track) from the album: pick the first in the list.
 	my $album = Songs::Get($ID, 'album');
@@ -169,6 +169,7 @@ sub download_one {
 		$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {$self->load_search_results($ID,1,\&download_one,@_)});
 	}
 }
+
 
 
 #####################################################################
@@ -517,9 +518,8 @@ sub entry_selected_cb {
 	warn "Albuminfo: fetching review from $url\n" if $::debug;
 	$self->cancel();
 	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->{searchview}->hide(); $self->{infoview}->show();
-		$self->load_review(::GetSelID($self),0,$url,@_)}, url=>$url, cache=>1);
+		$self->load_review(::GetSelID($self),0,undef,$url,@_)}, url=>$url, cache=>1);
 }
-
 
 
 
@@ -581,7 +581,7 @@ sub update_titlebox {
 }
 
 sub load_search_results {
-	my ($self,$ID,$md,$cb,$html,$type) = @_; # $md = 1 if mass_download, 0 otherwise. $cb = callback function = download_one if mass_download.
+	my ($self,$ID,$md,$cb,$html,$type) = @_; # $md = 1 if mass_download, 0 otherwise. $cb = callback function if mass_download, undef otherwise.
 	delete $self->{waiting};
 	my $result = parse_amg_search_results($html, $type); # $result[$i] = {url, album, artist, label, year}
 	my ($artist,$year) = ::Songs::Get($ID, qw/artist year/);
@@ -616,7 +616,6 @@ sub load_review {
 	if ($::Options{OPT.'SaveFields'}) {push(@towrite, [$ID, %{$self->{fields}}]); save_fields()}
 	::IdleDo('9_download_one'.$self, undef, $cb, $self) if $cb;
 }
-
 
 sub parse_amg_search_results {
 	my ($html,$type) = @_;
