@@ -74,7 +74,6 @@ my @ColumnMenu = # The order here must be the same as the order in @columns
 	{ label => _"Year",	check => sub {return $columns[3]->{col}->get_visible},	code => sub {my $c=$columns[3]->{col}; $c->set_visible(!$c->get_visible)}, },
 );
 my %savebuttons;          # Needed for dynamically adding/removing "Save review"-buttons from layout.
-my %boxandcovers;         # Needed for dynamically adding/removing cover from layout.
 my @towrite;              # Needed to avoid progress bar overflow in save_fields when called from mass_download
 my $save_fields_lock = 0; # Needed to avoid progress bar overflow in save_fields when called from mass_download
 
@@ -88,11 +87,11 @@ sub Stop {
 }
 
 sub prefbox {
-	my $frame_cover  = Gtk2::Frame->new(_" Cover ");
-	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text1=>_"Cover Size : ", text2=>_"(applied after restart)");
-	my $chk_pic      = ::NewPrefCheckButton(OPT.'ShowCover'=>_"Show cover", widget=>$spin_picsize, cb=>sub {for my $boxandcover (values %boxandcovers) {
-		if ($_[0]->get_active)	{$boxandcover->[0]->pack_start($boxandcover->[1],0,0,0); $boxandcover->[0]->show()}
-		else			{$boxandcover->[0]->remove($boxandcover->[1])}}});
+	my $frame_cover  = Gtk2::Frame->new(_" Album cover ");
+	my $spin_picsize = ::NewPrefSpinButton(OPT.'CoverSize',50,500, step=>5, page=>10, text =>_("Cover size : %d"), 
+		cb=>sub { ::HasChanged('plugin_albuminfo_option_pic'); });
+	my $chk_pic = ::NewPrefCheckButton(OPT.'ShowCover' => _"Show artist picture", widget => ::Vpack($spin_picsize), 
+		cb=>sub { ::HasChanged('plugin_albuminfo_option_pic'); } );
 	$frame_cover->add($chk_pic);
 
 	my $frame_review = Gtk2::Frame->new(_" Review ");
@@ -185,9 +184,19 @@ sub new {
 	$self->{fontsize} = $fontsize->get_size() / Gtk2::Pango->scale;
 
 	# Heading: cover and album info.
-	my $cover = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, maxsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show larger image", 
-		click1=>\&cover_popup, click3=>sub {::PopupAAContextMenu({self=>$_[0], field=>'album', ID=>$::SongID, gid=>Songs::Get_gid($::SongID,'album'), mode=>'P'});} });
 	my $statbox = Gtk2::VBox->new(0,0);
+	my $cover = Gtk2::HBox->new(0,0);
+	my $cover_create = sub
+	{	my $box = shift;
+		$box->remove($_) for $box->get_children();
+		return unless $::Options{OPT.'ShowCover'};
+		my $child = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, minsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show larger image",
+			click1=>\&cover_popup, click3=>sub {::PopupAAContextMenu({self=>$_[0], field=>'album', ID=>$::SongID, gid=>Songs::Get_gid($::SongID,'album'), mode=>'P'});} });
+		$child->show_all();
+		$box->add($child);
+	};
+	::Watch($cover, plugin_albuminfo_option_pic=>$cover_create);
+	$cover_create->($cover);
 	for my $name (qw/Ltitle Lstats/) {
 		my $l = Gtk2::Label->new('');
 		$self->{$name} = $l;
@@ -220,9 +229,8 @@ sub new {
 	$stateventbox->signal_connect(button_press_event => sub {my ($stateventbox, $event) = @_; return 0 unless $event->button == 3; my $ID = ::GetSelID($stateventbox);
 		 ::PopupAAContextMenu({ self=>$stateventbox, mode=>'P', field=>'album', ID=>$ID, gid=>Songs::Get_gid($ID,'album') }) if defined $ID; return 1; } );
 	my $coverstatbox = Gtk2::HBox->new(0,0);
-	$coverstatbox->pack_start($cover,0,0,0) if $::Options{OPT.'ShowCover'};
+	$coverstatbox->pack_start($cover,0,1,0);
 	$coverstatbox->pack_end($stateventbox,1,1,5);
-	$boxandcovers{$self} = [$coverstatbox,$cover];
 
 	# For the review: a TextView in a ScrolledWindow in a HBox
 	my $textview = Gtk2::TextView->new();
@@ -300,7 +308,7 @@ sub new {
 	$self->pack_start($searchview,1,1,0);
 	$searchview->signal_connect(show => sub {$searchbutton->set_active(1)});
 	$searchview->signal_connect(hide => sub {$searchbutton->set_active(0)});
-	$self->signal_connect(destroy => sub {$_[0]->cancel(); delete $savebuttons{$_[0]}; delete $boxandcovers{$_[0]}});
+	$self->signal_connect(destroy => sub {$_[0]->cancel(); delete $savebuttons{$_[0]};});
 
 	# Save elements that will be needed in other methods.
 	$self->{buffer} = $textview->get_buffer();
