@@ -11,7 +11,7 @@ title	Albuminfo plugin
 version	0.2
 author  Øystein Tråsdahl (based on the Artistinfo plugin)
 desc	Retrieves album-relevant information (review etc.) from allmusic.com.
-url	https://github.com/trasdahl/gmusicbrowser-plugins/
+url	https://github.com/trasdahl/trasdahl-plugins/
 =cut
 
 # TODO:
