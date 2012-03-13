@@ -5,7 +5,7 @@
 # it under the terms of the GNU General Public License version 3, as
 # published by the Free Software Foundation
 
-=gmbplugin ALBUMINFO
+=for gmbplugin ALBUMINFO
 name	Albuminfo
 title	Albuminfo plugin
 version	0.2
@@ -374,10 +374,9 @@ sub button_release_cb {
 			::main::openurl($tag->{url});
 			last;
 		} elsif ($tag->{field} eq 'year') {
-			my $aID = Songs::Get_gid(::GetSelID($self),'album');
-			Songs::Set(Songs::MakeFilterFromGID('album', $aID)->filter(), [$tag->{field} => $tag->{val}]);
+			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), [$tag->{field} => $tag->{val}]);
 		} else { # Genre, Mood, Style, Theme
-			Songs::Set(Songs::MakeFilterFromGID('album', Songs::Get_gid(::GetSelID($self),'album'))->filter(), ['+'.$tag->{field} => $tag->{val}]);
+			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), ['+'.$tag->{field} => $tag->{val}]);
 		}
 	}
 	return ::FALSE;
@@ -570,7 +569,11 @@ sub album_changed {
 		}
 	}
 	warn "Albuminfo: fetching search results from $url\n" if $::debug;
-	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,0,undef,@_)}, url=>$url, cache=>1);
+	::IdleDo('9_load_albuminfo'.$self,undef, sub { # IdleDo because it's nice to be important, but it's more important to be nice.
+		$self->cancel();
+		$self->print_warning(_"Loading...");
+		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,0,undef,@_)}, url=>$url, cache=>1);
+	});
 }
 
 sub update_titlebox {
@@ -583,8 +586,8 @@ sub update_titlebox {
 				_("Rating range:")	.' '.$self->{ratingrange},
 				_("Total playcount:")	.' '.$self->{playcount});
 	$self->{ratingpic}->set_from_pixbuf(Songs::Stars($self->{rating},'rating'));
-	$self->{Ltitle}->set_markup( AA::ReplaceFields($aID,"<big><b>%a</b></big>","album",1) );
-	$self->{Lstats}->set_markup( AA::ReplaceFields($aID,'%b « %y\n%s, %l',"album",1) );
+	$self->{Ltitle}->set_markup( AA::ReplaceFields($aID,"<b>%a</b>","album",1) );
+	$self->{Lstats}->set_markup( AA::ReplaceFields($aID,'<small>%b « %y\n%s, %l</small>',"album",1) );
 	for my $name (qw/Ltitle Lstats/) { $self->{$name}->set_tooltip_text($tip); }
 }
 
@@ -697,9 +700,9 @@ sub load_file {
 		while (my ($key,$val) = splice(@tmp, 0, 2)) {
 			if ($key && $val) {
 				if ($key =~ m/genre|mood|style|theme/) {
-					@{$self->{fields}{$key}} = split(', ', $val);
+					@{$self->{fields}->{$key}} = split(', ', $val);
 				} else {
-					$self->{fields}{$key} = $val;
+					$self->{fields}->{$key} = $val;
 				}
 			}
 		}
@@ -743,9 +746,9 @@ sub save_fields {
 	return if $save_fields_lock;
 	return unless scalar(@towrite);
 	my ($ID,%fields) = @{shift(@towrite)};
-	my $album = Songs::Gid_to_Get("album", Songs::Get_gid($ID,'album'));
+	my $album = Songs::Get($ID, 'album');
 	warn "Albuminfo: Saving tracks on $album (".scalar(@towrite)." album".(scalar(@towrite)!=1 ? "s" : "")." in queue).\n" if $::debug;
-	my $IDs = Songs::MakeFilterFromGID('album', Songs::Get_gid($ID,'album'))->filter(); # Songs on this album
+	my $IDs = AA::GetIDs('album', Songs::Get_gid($ID,'album')); # IDs in album, order by tracknumber.
 	my @updated_fields;
 	for my $key (keys %fields) {
 		if ($key =~ m/genre|mood|style|theme/ && $::Options{OPT.$key} && $fields{$key}) {
