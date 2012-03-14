@@ -257,8 +257,8 @@ sub new {
 
 	# Manual search layout
 	my $searchview = Gtk2::VBox->new();
-	$self->{search} = my $search  = Gtk2::Entry->new();
-	$search->set_tooltip_text(_"Enter album name");
+	my $searchentry  = Gtk2::Entry->new();
+	$searchentry->set_tooltip_text(_"Enter album name");
 	my $Bsearch = ::NewIconButton('gtk-find', _"Search");
 	my $Bok     = Gtk2::Button->new_from_stock('gtk-ok');
 	my $Bcancel = Gtk2::Button->new_from_stock('gtk-cancel');
@@ -289,10 +289,10 @@ sub new {
 	my $scrwin = Gtk2::ScrolledWindow->new();
 	$scrwin->set_policy('automatic', 'automatic');
 	$scrwin->add($treeview);
-	$searchview->add( ::Vpack(['_', $search, $Bsearch],
+	$searchview->add( ::Vpack(['_', $searchentry, $Bsearch],
 				  '_',  $scrwin,
 				  '-',  ['-', $Bcancel, $Bok]) );
-	$search ->signal_connect(activate => \&new_search ); # Pressing Enter in the search entry.
+	$searchentry->signal_connect(activate => \&new_search ); # Pressing Enter in the search entry.
 	$Bsearch->signal_connect(clicked  => \&new_search );
 	$Bok    ->signal_connect(clicked  => \&entry_selected_cb );
 	$Bcancel->signal_connect(clicked  => \&song_changed );
@@ -316,6 +316,7 @@ sub new {
 	$self->{treeview} = $treeview;
 	$self->{infoview} = $infoview;
 	$self->{searchview} = $searchview;
+	$self->{searchentry} = $searchentry;
 	return $self;
 }
 
@@ -517,13 +518,15 @@ sub manual_search {
 	$self->{infoview}->hide();
 	$self->{searchview}->show();
 	my $gid = Songs::Get_gid(::GetSelID($self), 'album');
-	$self->{search}->set_text(Songs::Gid_to_Get('album', $gid));
+	$self->{searchentry}->set_text(Songs::Gid_to_Get('album', $gid));
+	$self->{searchentry}->select_region(0,-1);
+	$self->{searchentry}->grab_focus();
 	$self->new_search();
 }
 
 sub new_search {
 	my $self = ::find_ancestor($_[0], __PACKAGE__); # $_[0] can be a button or gtk-entry. Ancestor is an albuminfo object.
-	my $album = $self->{search}->get_text();
+	my $album = $self->{searchentry}->get_text();
 	$album =~ s|^\s+||; $album =~ s|\s+$||; # remove leading and trailing spaces
 	return if $album eq '';
 	my $url = AMG_SEARCH_URL.::url_escapeall($album);
