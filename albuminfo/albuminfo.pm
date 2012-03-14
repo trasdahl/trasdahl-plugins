@@ -297,8 +297,7 @@ sub new {
 	$Bok    ->signal_connect(clicked  => \&entry_selected_cb );
 	$Bcancel->signal_connect(clicked  => \&song_changed );
 	$scrwin ->signal_connect(key_press_event => sub {entry_selected_cb(::find_ancestor($_[0],__PACKAGE__)) if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Return};});
-	$scrwin ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
-	$search ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
+	$self   ->signal_connect(key_press_event => sub {song_changed(::find_ancestor($_[0],__PACKAGE__))      if $_[1]->keyval == $Gtk2::Gdk::Keysyms{Escape};});
 	$searchview->show_all(); # Must call it once now before $searchview->set_no_show_all(1) disables it.
 	$searchview->set_no_show_all(1); # GMB sometimes calls $plugin->show_all(). We then want only infoview to show.
 	$searchview->hide();
