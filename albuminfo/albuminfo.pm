@@ -42,6 +42,7 @@ my @showfields =
 	{short => 'mood',	long => _"Moods",		active => 1,	multi => 1,	defaultshow => 0},
 	{short => 'style',	long => _"Styles",		active => 1,	multi => 1,	defaultshow => 0},
 	{short => 'theme',	long => _"Themes",		active => 1,	multi => 1,	defaultshow => 0},
+	{short => 'tracks',	long => _"Tracks",		active => 1,	multi => 0,	defaultshow => 0},
 );
 
 ::SetDefaultOptions(OPT, PathFile  	=> "~/.config/gmusicbrowser/review/%a - %l.txt",
@@ -125,7 +126,7 @@ sub prefbox {
 	for my $f (@showfields) {
 		push(@chk_show, ::NewPrefCheckButton(OPT.'Show'.$f->{short} => $f->{long})) if $f->{active};
 	}
-	$frame_layout->add(::Hpack([@chk_show[0..1]], [@chk_show[2..3]], [@chk_show[4..5]], [@chk_show[6..7]]));
+	$frame_layout->add(::Hpack([@chk_show[0..1]], [@chk_show[2..3]], [@chk_show[4..5]], [@chk_show[6..7]], [$chk_show[8]]));
 
 	my $btn_download = bless Gtk2::Button->new(_"Download");
 	$btn_download->set_tooltip_text(_"Fields will be saved according to the settings above. Albuminfo files will be re-read if there are fields to be saved and you choose 'albums missing reviews' in the combo box.");
@@ -375,7 +376,9 @@ sub button_release_cb {
 			last;
 		} elsif ($tag->{field} eq 'year') {
 			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), [$tag->{field} => $tag->{val}]);
-		} else { # Genre, Mood, Style, Theme
+		} elsif ($tag->{field} eq 'track') {
+			Songs::Set($tag->{ID}, [$tag->{field} => $tag->{val}]);
+		} elsif ($tag->{field} =~ m/genre|mood|style|theme/i)  { # Genre, Mood, Style, Theme
 			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), ['+'.$tag->{field} => $tag->{val}]);
 		}
 	}
@@ -457,6 +460,31 @@ sub print_review {
 				}
 			} elsif ($f->{short} eq 'rating') {
 				$buffer->insert_pixbuf($iter, Songs::Stars($fields->{rating}, 'rating'));
+			} elsif ($f->{short} eq 'tracks') {
+				my $idsinalbum = AA::GetIDs('album', Songs::Get_gid(::GetSelID($self), 'album')); # IDs in album, order by tracknumber.
+				my $discids  = Songs::BuildHash('disc', $idsinalbum, 'undef', 'idlist'); # Returns {disc => (ids)}
+				my $idhash = {}; my $titles = {};
+				while (my ($disc,$ids) = each(%$discids)) {
+					$disc = 1 if $disc==0;
+					$idhash->{$disc} = Songs::BuildHash('track', $ids, 'undef', 'idlist'); # Returns {track => (ids)}
+					$titles->{$disc} = Songs::BuildHash('track', $ids, 'undef', 'title');  # Returns {track => title}
+				}
+				$buffer->insert($iter, "\n");
+				for my $disc (sort {$a <=> $b} keys %{$fields->{tracks}}) {
+					$buffer->insert($iter, "Disc $disc\n") if scalar keys %{$fields->{tracks}} > 1;
+					for my $n (sort {$a <=> $b} keys %{$fields->{tracks}->{$disc}}) {
+						my $amgtrack = $fields->{tracks}->{$disc}->{$n};
+						# Don't create link if tag is equal, OR if amg track is not in local collection.
+						if (!$titles->{$disc}->{$n} || ($titles->{$disc}->{$n} && ::superlc($amgtrack->{title}) eq ::superlc(@{$titles->{$disc}->{$n}}))) {
+							$buffer->insert($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n");
+						} else {
+							my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
+							$tag->{ID} = $idhash->{$disc}->{$n}; $tag->{field} = 'track'; $tag->{val} = $amgtrack->{title}; $tag->{tip} = _"Update track";
+							$buffer->insert_with_tags($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n", $tag);
+						}
+					}
+					$buffer->insert($iter, "\n");
+				}
 			} else {
 				$buffer->insert($iter,"$fields->{$f->{short}}");
 			}
@@ -646,6 +674,8 @@ sub parse_amg_album_page {
 	$html =~ s|\n| |g;
 	my $result = {};
 	$result->{url} = $url;
+	$result->{album} = $1 if $html =~ m|<h1 class="title">(.*?)</h1>|;
+	$result->{artist} = $1 if $html =~ m|<div class="subtitle"><a href=".*?">(.*?)</a></div>|;
 	$result->{author} = $1 if $html =~ m|<p class="author">by (.*?)</p>|;
 	$result->{review} = $1 if $html =~ m|<p class="text">(.*?)</p>|;
 	if ($result->{review}) {
@@ -669,8 +699,37 @@ sub parse_amg_album_page {
 	(@{$result->{mood}})	= $moodshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $moodshtml;
 	my ($themeshtml)	= $html =~ m|<h3>Themes</h3>\s*?<ul.*?>(.*?)</ul>|;
 	(@{$result->{theme}})	= $themeshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $themeshtml;
+
+	# if (my ($trackshtml) = $html =~ m|<!-- End Tracks Table Header Row -->(.*?)<!-- End Tracks Table -->|g) {
+	my $disc = 1;
+	while ($html =~ m|<!-- End Tracks Table Header Row -->(.*?)<!-- End Tracks Table -->|g) {
+		my $trackshtml = $1;
+		for my $track (split /<\/tr>/, $trackshtml) {
+			if ($track =~ m|<td class="cell">(\d+?)</td>.*?<td class="cell">(.*?)</td>\s*?<td.*?class="cell">(.*?)</td>\s*?<td class="cell">(.*?)</td>|) {
+				$result->{tracks}->{$disc}->{$1}->{title}    = trim(html_strip_tags($2));
+				$result->{tracks}->{$disc}->{$1}->{composer} = trim(html_strip_tags($3));
+				$result->{tracks}->{$disc}->{$1}->{length}   = $4;
+				# print "$disc-$1: $result->{tracks}->{$disc}->{$1}->{title} ($4)\n";
+			}
+		}
+		$disc++;
+	}
+
 	if ($::Options{OPT.'StyleAsGenre'} && $result->{style}) {@{$result->{genre}} = ::uniq(@{$result->{style}}, @{$result->{genre}})}
 	return $result;
+}
+
+sub trim {
+	my $s = shift;
+	$s =~ s/^\s+|\s+$//g;
+	return $s;
+}
+
+sub html_strip_tags {
+	my $s = shift;
+	$s =~ s|<.+?>||g;
+	$s =~ s|&hellip;||g;
+	return $s;
 }
 
 # Get right encoding of html and decode it
@@ -696,6 +755,7 @@ sub load_file {
 		local $/ = undef; #slurp mode
 		my $text = <$fh>;
 		if (my $utf8 = Encode::decode_utf8($text)) {$text = $utf8}
+		# TODO: Create a recursive function that takes an xml text and returns a hash.
 		my (@tmp) = $text =~ m|<(.*?)>(.*)</\1>|gs;
 		while (my ($key,$val) = splice(@tmp, 0, 2)) {
 			if ($key && $val) {
@@ -704,6 +764,14 @@ sub load_file {
 				} else {
 					$self->{fields}->{$key} = $val;
 				}
+			}
+		}
+		while ($text =~ m|<disc number="(.*?)">(.*?)</disc>|gs) {
+			my $disc = $1; my $discxml = $2;
+			while ($discxml =~ m|<track number="(.*?)">(.*?)</track>|gs) {
+				my $n = $1; my $xml = $2;
+				$self->{fields}->{tracks}->{$disc}->{$n}->{$1} = $2 while $xml =~ m|<(\w+?)>(.*?)</\1>|g;
+				# $2 =~ m|<title>(.*?)</title>\s*<composer>(.*?)</composer>\s*<length>(.*?)</length>\s*|;
 			}
 		}
 		close $fh;
@@ -722,7 +790,18 @@ sub save_review {
 	my ($ID,$fields) = @_;
 	my $text = "";
 	for my $key (sort {lc $a cmp lc $b} keys %{$fields}) { # Sort fields alphabetically
-		if ($key =~ m/genre|mood|style|theme/) {
+		# TODO: Create a recursive function that takes a hash and returns an xml text.
+		if ($key eq 'tracks') {
+			for my $disc (sort {$a <=> $b} keys %{$fields->{tracks}}) {
+				$text .= "<disc number=\"$disc\">\n";
+				for my $n (sort {$a <=> $b} keys %{$fields->{tracks}->{$disc}}) {
+					$text .= "\t<track number=\"$n\">\n";
+					$text .= "\t\t<$_>$fields->{tracks}->{$disc}->{$n}->{$_}</$_>\n" for qw/title composer length/;
+					$text .= "\t</track>\n";
+				}
+				$text .= "</disc>\n";
+			}
+		} elsif ($key =~ m/genre|mood|style|theme/) {
 			$text = $text . "<$key>".join(", ", @{$fields->{$key}})."</$key>\n";
 		} else {
 			$text = $text . "<$key>".$fields->{$key}."</$key>\n";
