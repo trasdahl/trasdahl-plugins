@@ -461,10 +461,10 @@ sub print_review {
 			} elsif ($f->{short} eq 'rating') {
 				$buffer->insert_pixbuf($iter, Songs::Stars($fields->{rating}, 'rating'));
 			} elsif ($f->{short} eq 'tracks') {
-				my $idsinalbum = AA::GetIDs('album', Songs::Get_gid(::GetSelID($self), 'album')); # IDs in album, order by tracknumber.
-				my $discids  = Songs::BuildHash('disc', $idsinalbum, 'undef', 'idlist'); # Returns {disc => (ids)}
+				my $idsinalbum = AA::GetIDs('album', Songs::Get_gid(::GetSelID($self), 'album')); # IDs in album, ordered by tracknumber.
+				my $discs  = Songs::BuildHash('disc', $idsinalbum, 'undef', 'idlist'); # Returns {disc => (ids)}
 				my $idhash = {}; my $titles = {};
-				while (my ($disc,$ids) = each(%$discids)) {
+				while (my ($disc,$ids) = each(%$discs)) {
 					$disc = 1 if $disc==0;
 					$idhash->{$disc} = Songs::BuildHash('track', $ids, 'undef', 'idlist'); # Returns {track => (ids)}
 					$titles->{$disc} = Songs::BuildHash('track', $ids, 'undef', 'title');  # Returns {track => title}
@@ -700,7 +700,6 @@ sub parse_amg_album_page {
 	my ($themeshtml)	= $html =~ m|<h3>Themes</h3>\s*?<ul.*?>(.*?)</ul>|;
 	(@{$result->{theme}})	= $themeshtml =~ m|<li><a.*?>(.*?)</a></li>|g if $themeshtml;
 
-	# if (my ($trackshtml) = $html =~ m|<!-- End Tracks Table Header Row -->(.*?)<!-- End Tracks Table -->|g) {
 	my $disc = 1;
 	while ($html =~ m|<!-- End Tracks Table Header Row -->(.*?)<!-- End Tracks Table -->|g) {
 		my $trackshtml = $1;
@@ -709,7 +708,6 @@ sub parse_amg_album_page {
 				$result->{tracks}->{$disc}->{$1}->{title}    = trim(html_strip_tags($2));
 				$result->{tracks}->{$disc}->{$1}->{composer} = trim(html_strip_tags($3));
 				$result->{tracks}->{$disc}->{$1}->{length}   = $4;
-				# print "$disc-$1: $result->{tracks}->{$disc}->{$1}->{title} ($4)\n";
 			}
 		}
 		$disc++;
@@ -755,7 +753,6 @@ sub load_file {
 		local $/ = undef; #slurp mode
 		my $text = <$fh>;
 		if (my $utf8 = Encode::decode_utf8($text)) {$text = $utf8}
-		# TODO: Create a recursive function that takes an xml text and returns a hash.
 		my (@tmp) = $text =~ m|<(.*?)>(.*)</\1>|gs;
 		while (my ($key,$val) = splice(@tmp, 0, 2)) {
 			if ($key && $val) {
@@ -771,7 +768,6 @@ sub load_file {
 			while ($discxml =~ m|<track number="(.*?)">(.*?)</track>|gs) {
 				my $n = $1; my $xml = $2;
 				$self->{fields}->{tracks}->{$disc}->{$n}->{$1} = $2 while $xml =~ m|<(\w+?)>(.*?)</\1>|g;
-				# $2 =~ m|<title>(.*?)</title>\s*<composer>(.*?)</composer>\s*<length>(.*?)</length>\s*|;
 			}
 		}
 		close $fh;
@@ -790,7 +786,6 @@ sub save_review {
 	my ($ID,$fields) = @_;
 	my $text = "";
 	for my $key (sort {lc $a cmp lc $b} keys %{$fields}) { # Sort fields alphabetically
-		# TODO: Create a recursive function that takes a hash and returns an xml text.
 		if ($key eq 'tracks') {
 			for my $disc (sort {$a <=> $b} keys %{$fields->{tracks}}) {
 				$text .= "<disc number=\"$disc\">\n";
@@ -802,9 +797,9 @@ sub save_review {
 				$text .= "</disc>\n";
 			}
 		} elsif ($key =~ m/genre|mood|style|theme/) {
-			$text = $text . "<$key>".join(", ", @{$fields->{$key}})."</$key>\n";
+			$text .= "<$key>".join(", ", @{$fields->{$key}})."</$key>\n";
 		} else {
-			$text = $text . "<$key>".$fields->{$key}."</$key>\n";
+			$text .= "<$key>".$fields->{$key}."</$key>\n";
 		}
 	}
 	my $format = $::Options{OPT.'PathFile'};
