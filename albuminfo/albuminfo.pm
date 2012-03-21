@@ -478,7 +478,7 @@ sub print_review {
 							$buffer->insert($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n");
 						} else {
 							my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
-							$tag->{ID} = $idhash->{$disc}->{$n}; $tag->{field} = 'track'; $tag->{val} = $amgtrack->{title}; $tag->{tip} = _"Update track";
+							$tag->{ID} = $idhash->{$disc}->{$n}; $tag->{field} = 'title'; $tag->{val} = $amgtrack->{title}; $tag->{tip} = _"Update track";
 							$buffer->insert_with_tags($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n", $tag);
 						}
 					}
