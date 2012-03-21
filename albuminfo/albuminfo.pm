@@ -371,12 +371,11 @@ sub button_release_cb {
 	my ($x,$y) = $textview->window_to_buffer_coords('widget',$event->x, $event->y);
 	my $iter = $textview->get_iter_at_location($x,$y);
 	for my $tag ($iter->get_tags) {
-		if ($tag->{url}) {
-			::main::openurl($tag->{url});
-			last;
-		} elsif ($tag->{field} eq 'year') {
+		last unless $tag->{url} || $tag->{field};
+		::main::openurl($tag->{url}) if ($tag->{url});
+		if ($tag->{field} eq 'year') {
 			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), [$tag->{field} => $tag->{val}]);
-		} elsif ($tag->{field} eq 'track') {
+		} elsif ($tag->{field} eq 'title') {
 			Songs::Set($tag->{ID}, [$tag->{field} => $tag->{val}]);
 		} elsif ($tag->{field} =~ m/genre|mood|style|theme/i)  { # Genre, Mood, Style, Theme
 			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), ['+'.$tag->{field} => $tag->{val}]);
