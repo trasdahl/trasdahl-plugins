@@ -371,8 +371,8 @@ sub button_release_cb {
 	my ($x,$y) = $textview->window_to_buffer_coords('widget',$event->x, $event->y);
 	my $iter = $textview->get_iter_at_location($x,$y);
 	for my $tag ($iter->get_tags) {
-		last unless $tag->{url} || $tag->{field};
 		::main::openurl($tag->{url}) if ($tag->{url});
+		last unless $tag->{field};
 		if ($tag->{field} eq 'year') {
 			Songs::Set(AA::GetIDs('album', Songs::Get_gid(::GetSelID($self),'album')), [$tag->{field} => $tag->{val}]);
 		} elsif ($tag->{field} eq 'title') {
