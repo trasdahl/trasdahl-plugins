@@ -282,7 +282,6 @@ sub new {
 	}
 	$treeview->set_rules_hint(1);
 	$treeview->signal_connect(row_activated => \&entry_selected_cb);
-	$treeview->{store} = $store;
 	my $scrwin = Gtk2::ScrolledWindow->new();
 	$scrwin->set_policy('automatic', 'automatic');
 	$scrwin->add($treeview);
@@ -309,7 +308,6 @@ sub new {
 
 	# Save elements that will be needed in other methods.
 	$self->{buffer} = $textview->get_buffer();
-	$self->{store} = $store;
 	$self->{treeview} = $treeview;
 	$self->{infoview} = $infoview;
 	$self->{searchview} = $searchview;
@@ -543,7 +541,7 @@ sub new_search {
 	return if $album eq '';
 	my $url = AMG_SEARCH_URL.::url_escapeall($album);
 	$self->cancel();
-	$self->{store}->clear();
+	$self->{treeview}->get_model->clear();
 	warn "Albuminfo: fetching search results from $url.\n" if $::debug;
 	$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->print_results(@_)},url=>$url, cache=>1);
 }
@@ -552,9 +550,10 @@ sub print_results {
 	my ($self,$html,$type,$url) = @_;
 	delete $self->{waiting};
 	my $result = parse_amg_search_results($html, $type); # result is a ref to an array of hash refs
-	$self->{store}->set_sort_column_id(5, 'ascending');
+	my $store= $self->{treeview}->get_model();
+	$store->set_sort_column_id(5, 'ascending');
 	for (@$result) {
-		$self->{store}->set($self->{store}->append, 0,$_->{album}, 1,$_->{artist}, 2,$_->{label}, 3,$_->{year}, 4,$_->{url}."/review", 5,$_->{order});
+		$store->set($store->append, 0,$_->{album}, 1,$_->{artist}, 2,$_->{label}, 3,$_->{year}, 4,$_->{url}."/review", 5,$_->{order});
 	}
 }
 
@@ -562,7 +561,7 @@ sub entry_selected_cb {
 	my $self = ::find_ancestor($_[0], __PACKAGE__); # $_[0] may be the TreeView or the 'OK' button. Ancestor is an albuminfo object.
 	my ($path, $column) = $self->{treeview}->get_cursor();
 	unless (defined $path) {$self->{searchview}->hide(); $self->{infoview}->show(); return} # The user may click OK before selecting an album
-	my $store = $self->{treeview}->{store};
+	my $store = $self->{treeview}->get_model;
 	my $url = $store->get($store->get_iter($path),4);
 	warn "Albuminfo: fetching review from $url\n" if $::debug;
 	$self->cancel();
