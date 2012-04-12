@@ -505,11 +505,11 @@ sub print_review {
 						my $amgtrack = $fields->{tracks}->{$disc}->{$n};
 						# Don't create link if tag is equal, OR if amg track is not in local collection.
 						if (!$titles->{$disc}->{$n} || ($titles->{$disc}->{$n} && ::superlc($amgtrack->{title}) eq ::superlc(@{$titles->{$disc}->{$n}}))) {
-							$buffer->insert($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n"); # TODO: not all tracks on allmusic have track length.
+							$buffer->insert($iter, "$n. $amgtrack->{title}".($amgtrack->{length} ? " ($amgtrack->{length})" : "")."\n");
 						} else {
 							my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
 							$tag->{ID} = $idhash->{$disc}->{$n}; $tag->{field} = 'title'; $tag->{val} = $amgtrack->{title}; $tag->{tip} = _"Update track";
-							$buffer->insert_with_tags($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n", $tag);
+							$buffer->insert_with_tags($iter, "$n. $amgtrack->{title}".($amgtrack->{length} ? " ($amgtrack->{length})" : "")."\n", $tag);
 						}
 					}
 					$buffer->insert($iter, "\n");
