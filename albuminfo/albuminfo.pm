@@ -229,7 +229,7 @@ sub new {
 	$buttonbox->pack_end($refreshbutton,0,0,0);
 	# my $source = ::NewPrefCombo( OPT.'Site', {map {$_=>$sites{$_}[0]} keys %sites} ,cb=>sub {song_changed($_[0],undef,undef,2)}, toolitem=>_"Select source");
 	# $buttonbox->pack_end($source,0,0,0);
-	my @radios = ::NewPrefRadio(OPT.'Site', sub {song_changed($_[0],undef,undef,2)}, (map {$sites{$_}[0]=>$_} sort keys %sites)); # TODO: don't force reload from web when source changes.
+	my @radios = ::NewPrefRadio(OPT.'Site', sub {song_changed($_[0],undef,undef,2)}, (map {$sites{$_}[0]=>$_} sort keys %sites));
 	# TODO: remove manual search button when last.fm is source?
 	for my $site (sort keys %sites) {
 		my $r = shift(@radios);	$r->set_mode(0); $r-> set_relief("none");
