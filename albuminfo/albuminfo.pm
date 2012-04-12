@@ -191,7 +191,7 @@ sub new {
 	{	my $box = shift;
 		$box->remove($_) for $box->get_children();
 		return unless $::Options{OPT.'ShowCover'};
-		my $child = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, minsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show larger image",
+		my $child = Layout::NewWidget("Cover", {group=>$options->{group}, forceratio=>1, minsize=>$::Options{OPT.'CoverSize'}, maxsize=>$::Options{OPT.'CoverSize'}, xalign=>0, tip=>_"Click to show larger image",
 			click1=>\&cover_popup, click3=>sub {::PopupAAContextMenu({self=>$_[0], field=>'album', ID=>$::SongID, gid=>Songs::Get_gid($::SongID,'album'), mode=>'P'});} });
 		$child->show_all();
 		$box->add($child);
