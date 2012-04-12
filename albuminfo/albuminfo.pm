@@ -26,10 +26,17 @@ require $::HTTP_module;
 use Gtk2::Gdk::Keysyms;
 use base 'Gtk2::Box';
 use constant
-{	OPT	=> 'PLUGIN_ALBUMINFO_',
-	AMG_SEARCH_URL => 'http://allmusic.com/search/album/',
-	AMG_ALBUM_URL => 'http://allmusic.com/album/',
+{	OPT		=> 'PLUGIN_ALBUMINFO_',
+	AMG_SEARCH_URL	=> 'http://allmusic.com/search/album/',
+	AMG_ALBUM_URL	=> 'http://allmusic.com/album/',
+	LASTFM_URL	=> 'http://ws.audioscrobbler.com/2.0/',
+	KEY		=> '7aa688c2466dc17263847da16f297835',
 };
+
+my %sites =
+(	allmusic => ['Allmusic.com', AMG_SEARCH_URL.'%l', \&parse_amg_search_results, \&parse_amg_album_page, 'plugin-artistinfo-allmusic'],
+	lastfm   => ['Last.fm', LASTFM_URL.'?api_key='.KEY.'&method=album.getInfo&autocorrect=1&artist=%a&album=%l', undef, \&parse_lastfm, 'plugin-artistinfo-lastfm'],
+);
 
 my @showfields =
 (	{short => 'label',	long => _"Record label",	active => 1,	multi => 0,	defaultshow => 1},
@@ -45,10 +52,11 @@ my @showfields =
 	{short => 'tracks',	long => _"Tracks",		active => 1,	multi => 0,	defaultshow => 0},
 );
 
-::SetDefaultOptions(OPT, PathFile  	=> "~/.config/gmusicbrowser/review/%a - %l.txt",
+::SetDefaultOptions(OPT, PathFile  	=> '~/.config/gmusicbrowser/review/%s/%a - %l.txt',
 			 ShowCover	=> 1,
 			 CoverSize	=> 100,
 			 StyleAsGenre	=> 0,
+		    	 Site		=> 'allmusic',
 );
 ::SetDefaultOptions(OPT, 'Show'.$_->{short} => $_->{defaultshow}) for (@showfields);
 delete $::Options{OPT.'Column'.$_} for 0..3; #remove old column options
@@ -89,10 +97,11 @@ sub prefbox {
 	$frame_cover->add($chk_pic);
 
 	my $frame_review = Gtk2::Frame->new(_" Review ");
-	my $entry_path   = ::NewPrefEntry(OPT.'PathFile' => _"Save album info in:", width=>40);
+	my $entry_path   = ::NewPrefEntry(OPT.'PathFile' => _"Save album info in:", width=>40, tip=>"%s : Source (allmusic, last.fm)\n".::MakeReplaceText('talydnAYo'));
 	my $lbl_preview  = Label::Preview->new(event=>'CurSong Option', noescape=>1, wrap=>1, preview=>sub
 	{	return '' unless defined $::SongID;
 		my $t = ::pathfilefromformat( $::SongID, $::Options{OPT.'PathFile'}, undef,1);
+		$t =~ s/%s/$::Options{OPT.'Site'}/;
 		$t = ::filename_to_utf8displayname($t) if $t;
 		$t = $t ? ::PangoEsc(_("Example : ").$t) : "<i>".::PangoEsc(_"Invalid pattern")."</i>";
 		return '<small>'.$t.'</small>';
@@ -147,7 +156,7 @@ sub download_one {
 	my $ID  = $IDs->[0]; # Need a track (any track) from the album: pick the first in the list.
 	my $album = Songs::Get($ID, 'album');
 	unless ($album) {::IdleDo('9_download_one'.$self, undef, \&download_one, $self); return}
-	my $file = ::pathfilefromformat($ID, $::Options{OPT.'PathFile'}, undef, 1);
+	my $file = ::pathfilefromformat($ID, $::Options{OPT.'PathFile'}, undef, 1); $file =~ s/%s/$::Options{OPT.'Site'}/;
 	if ($::Options{OPT.'mass_download'} ne 'all' && $file && -r $file) {
 		if ($::Options{OPT.'SaveFields'}) {
 			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,$file,1,\&download_one);
@@ -157,7 +166,7 @@ sub download_one {
 	} else {
 		my $url = AMG_SEARCH_URL.::url_escapeall($album);
 		warn "Albuminfo: fetching search results from $url\n" if $::debug;
-		$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {$self->load_search_results($ID,1,\&download_one,@_)});
+		$self->{waiting} = Simple_http::get_with_cb(url=>$url, cache=>1, cb=>sub {$self->load_search_results($ID,1,\&download_one,$url,@_)});
 	}
 }
 
@@ -218,6 +227,16 @@ sub new {
 	$buttonbox->pack_end($searchbutton,0,0,0);
 	$buttonbox->pack_end($savebutton,0,0,0);
 	$buttonbox->pack_end($refreshbutton,0,0,0);
+	# my $source = ::NewPrefCombo( OPT.'Site', {map {$_=>$sites{$_}[0]} keys %sites} ,cb=>sub {song_changed($_[0],undef,undef,2)}, toolitem=>_"Select source");
+	# $buttonbox->pack_end($source,0,0,0);
+	my @radios = ::NewPrefRadio(OPT.'Site', sub {song_changed($_[0],undef,undef,2)}, (map {$sites{$_}[0]=>$_} sort keys %sites)); # TODO: don't force reload from web when source changes.
+	# TODO: remove manual search button when last.fm is source?
+	for my $site (sort keys %sites) {
+		my $r = shift(@radios);	$r->set_mode(0); $r-> set_relief("none");
+		$r->remove($_) for ($r->get_children);                          # Remove label...
+		$r->add(Gtk2::Image->new_from_stock($sites{$site}[4], 'menu')); # ...and add an icon instead.
+		$buttonbox->pack_end($r,0,0,0);
+	}
 	$statbox->pack_end($buttonbox,0,0,0);
 	my $stateventbox = Gtk2::EventBox->new(); # To catch mouse events
 	$stateventbox->add($statbox);
@@ -486,7 +505,7 @@ sub print_review {
 						my $amgtrack = $fields->{tracks}->{$disc}->{$n};
 						# Don't create link if tag is equal, OR if amg track is not in local collection.
 						if (!$titles->{$disc}->{$n} || ($titles->{$disc}->{$n} && ::superlc($amgtrack->{title}) eq ::superlc(@{$titles->{$disc}->{$n}}))) {
-							$buffer->insert($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n");
+							$buffer->insert($iter, "$n. $amgtrack->{title} ($amgtrack->{length})\n"); # TODO: not all tracks on allmusic have track length.
 						} else {
 							my $tag  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
 							$tag->{ID} = $idhash->{$disc}->{$n}; $tag->{field} = 'title'; $tag->{val} = $amgtrack->{title}; $tag->{tip} = _"Update track";
@@ -504,7 +523,7 @@ sub print_review {
 
 	if ($fields->{review}) {
 		$buffer->insert_with_tags($iter, "\n"._("Review")."\n", $tag_h2);
-		$buffer->insert_with_tags($iter, ::__x(_"by {author}", author=>$fields->{author})."\n", $tag_i);
+		$buffer->insert_with_tags($iter, ::__x(_"by {author}", author=>$fields->{author})."\n", $tag_i) if $fields->{author};
 		$buffer->insert($iter,$fields->{review});
 	} else {
 		$buffer->insert_with_tags($iter,"\n"._("No review written.")."\n",$tag_h2);
@@ -512,7 +531,7 @@ sub print_review {
 	$buffer->insert($iter, "\n\n");
 	my $tag_a  = $buffer->create_tag(undef, foreground=>"#4ba3d2", underline=>'single');
 	$tag_a->{url} = $fields->{url}; $tag_a->{tip} = $fields->{url};
-	$buffer->insert_with_tags($iter,_"Lookup at allmusic.com",$tag_a);
+	$buffer->insert_with_tags($iter,_"Lookup at ".$sites{$::Options{OPT.'Site'}}[0],$tag_a);
 	$buffer->set_modified(0);
 }
 
@@ -600,10 +619,10 @@ sub album_changed {
 	$self->update_titlebox($aID);
 	my $album = ::url_escapeall(Songs::Gid_to_Get("album",$aID));
 	unless (length($album)) {$self->print_warning(_"Unknown album"); return}
-	my $url = AMG_SEARCH_URL.$album;
+	my $url = ::ReplaceFields($ID, $sites{$::Options{OPT.'Site'}}[1], sub {::url_escapeall(::superlc($_[0]));});
 	$self->print_warning(_"Loading...");
-	unless ($force) { # Try loading from file.
-		my $file = ::pathfilefromformat( ::GetSelID($self), $::Options{OPT.'PathFile'}, undef, 1 );
+	unless ($force && $force==1) { # Try loading from file.
+		my $file = ::pathfilefromformat( ::GetSelID($self), $::Options{OPT.'PathFile'}, undef, 1 ); $file =~ s/%s/$::Options{OPT.'Site'}/;
 		if ($file && -r $file) {
 			::IdleDo('9_load_albuminfo'.$self,undef,\&load_file,$self,$ID,$file,0,undef);
 			return;
@@ -613,7 +632,8 @@ sub album_changed {
 	::IdleDo('9_load_albuminfo'.$self,undef, sub { # IdleDo because it's nice to be important, but it's more important to be nice.
 		$self->cancel();
 		$self->print_warning(_"Loading...");
-		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_search_results($ID,0,undef,@_)}, url=>$url, cache=>1);
+		my $loadsub = $sites{$::Options{OPT.'Site'}}[2] ? \&load_search_results : \&load_review;
+		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$loadsub->($self,$ID,0,undef,$url,@_)}, url=>$url, cache=>1);
 	});
 }
 
@@ -633,24 +653,25 @@ sub update_titlebox {
 }
 
 sub load_search_results {
-	my ($self,$ID,$md,$cb,$html,$type) = @_; # $md = 1 if mass_download, 0 otherwise. $cb = callback function if mass_download, undef otherwise.
+	my ($self,$ID,$md,$cb,$url,$html,$type) = @_; # $md = 1 if mass_download, 0 otherwise. $cb = callback function if mass_download, undef otherwise.
 	delete $self->{waiting};
-	my $result = parse_amg_search_results($html, $type); # $result[$i] = {url, album, artist, label, year}
+	my $parser = $sites{$::Options{OPT.'Site'}}[2];
+	my $result = $parser->($html, $type); # $result[$i] = {url, album, artist, label, year}
 	my ($artist,$year) = ::Songs::Get($ID, qw/artist year/);
-	my $url;
+	my $review_url;
 	for my $entry (@$result) {
 		# Pick the first entry with the right artist and year, or if not: just the right artist.
 		if ($entry->{artist} =~ m|$artist|i || $artist =~ m|$entry->{artist}|i) {
-			if (!$url || $year && $entry->{year} && $entry->{year} == $year) {
+			if (!$review_url || $year && $entry->{year} && $entry->{year} == $year) {
 				warn "Albuminfo: hit in search results: $entry->{album} by $entry->{artist} from $entry->{year} ($entry->{url})\n" if $::debug;
-				$url = $entry->{url}."/review";
+				$review_url = $entry->{url}."/review";
 			}
 			last if $year && $entry->{year} && $entry->{year} == $year;
 		}
 	}
-	if ($url) {
-		warn "Albuminfo: fetching review from $url\n" if $::debug;
-		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,$md,$cb,$url,@_)}, url=>$url, cache=>1);
+	if ($review_url) {
+		warn "Albuminfo: fetching review from $review_url\n" if $::debug;
+		$self->{waiting} = Simple_http::get_with_cb(cb=>sub {$self->load_review($ID,$md,$cb,$review_url,@_)}, url=>$review_url, cache=>1);
 	} else {
 		$self->{fields} = {};
 		warn "Albuminfo: album not found in search results\n" if $::debug;
@@ -662,11 +683,34 @@ sub load_search_results {
 sub load_review {
 	my ($self,$ID,$md,$cb,$url,$html,$type) = @_;
 	delete $self->{waiting};
-	$self->{fields} = parse_amg_album_page($url, decode($html,$type));
+	my $parser = $sites{$::Options{OPT.'Site'}}[3];
+	$self->{fields} = $parser->($url, decode($html,$type));
 	$self->print_review() unless $md;
 	save_review($ID, $self->{fields}) if $::Options{OPT.'AutoSave'} || $md;
 	if ($::Options{OPT.'SaveFields'}) {push(@towrite, [$ID, %{$self->{fields}}]); save_fields()}
 	::IdleDo('9_download_one'.$self, undef, $cb, $self) if $cb;
+}
+
+sub parse_lastfm {
+	my ($url, $xml) = @_;
+	my $result = {};
+	$result->{url} = $url;
+	for (qw/name artist releasedate listeners playcount content/) {
+		$result->{$_} = ::decode_html($1) if $xml=~ m#<$_>([^<]*)</$_>#s;
+	}
+	if ($xml =~ m#<content><\!\[CDATA\[(.*?)\n.*\]\]></content>#s) {
+		$result->{review} = $1;
+		$result->{review} =~ s/[\n\r] +?/\n/gim; # never space after newline
+		$result->{review} =~ s/<(.*?)>//gi; # strip tags
+	}
+	my $disc = 1; # Last.fm doesn't support discs, so all tracks will be on disc 1.
+	while ($xml =~ m#<track rank="(\d+)">(.*?)</track>#sg) {
+		my $track = $1;
+		my $track_xml = $2;
+		$result->{tracks}->{$disc}->{$track}->{title}    = $1 if $track_xml=~ m#<name>([^<]*)</name>#;
+		$result->{tracks}->{$disc}->{$track}->{length}   = sprintf("%d:%02d", $1/60, $1%60) if $track_xml=~ m#<duration>([^<]*)</duration>#;
+	}
+	return $result;
 }
 
 sub parse_amg_search_results {
@@ -804,7 +848,9 @@ sub save_review {
 				$text .= "<disc number=\"$disc\">\n";
 				for my $n (sort {$a <=> $b} keys %{$fields->{tracks}->{$disc}}) {
 					$text .= "\t<track number=\"$n\">\n";
-					$text .= "\t\t<$_>$fields->{tracks}->{$disc}->{$n}->{$_}</$_>\n" for qw/title composer length/;
+					for (qw/title composer length/) {
+						$text .= "\t\t<$_>$fields->{tracks}->{$disc}->{$n}->{$_}</$_>\n" if $fields->{tracks}->{$disc}->{$n}->{$_};
+					}
 					$text .= "\t</track>\n";
 				}
 				$text .= "</disc>\n";
@@ -815,7 +861,7 @@ sub save_review {
 			$text .= "<$key>".$fields->{$key}."</$key>\n";
 		}
 	}
-	my $format = $::Options{OPT.'PathFile'};
+	my $format = $::Options{OPT.'PathFile'}; $format =~ s/%s/$::Options{OPT.'Site'}/;
 	my ($path,$file) = ::pathfilefromformat( $ID, $format, undef, 1 );
 	unless ($path && $file) {::ErrorMessage(_("Error: invalid filename pattern")." : $format",$::MainWindow); return}
 	return unless ::CreateDir($path,$::MainWindow) eq 'ok';
